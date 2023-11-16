@@ -364,6 +364,7 @@ int response_buf_size = 0; //the size of the whole response buffer
 u32 *response_bytes = NULL; //an array keeping accumulated response buffer size
                             //e.g., response_bytes[i] keeps the response buffer size
                             //once messages 0->i have been received and processed by the SUT
+s32 hci_fd;                 // Unix socket for transporting HCI packets
 u32 max_annotated_regions = 0;
 u32 target_state_id = 0;
 u32 *state_ids = NULL;
@@ -988,14 +989,6 @@ int send_over_network()
 {
   int n;
   u8 likely_buggy = 0;
-  struct sockaddr_in serv_addr;
-  struct sockaddr_in local_serv_addr;
-
-  //Clean up the server if needed
-  if (cleanup_script) system(cleanup_script);
-
-  //Wait a bit for the server initialization
-  usleep(server_wait_usecs);
 
   //Clear the response buffer and reset the response buffer size
   if (response_buf) {
@@ -1009,66 +1002,21 @@ int send_over_network()
     response_bytes = NULL;
   }
 
-  //Create a TCP/UDP socket
-  int sockfd = -1;
-  if (net_protocol == PRO_TCP)
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  else if (net_protocol == PRO_UDP)
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-
-  if (sockfd < 0) {
-    PFATAL("Cannot create a socket");
-  }
-
   //Set timeout for socket data sending/receiving -- otherwise it causes a big delay
   //if the server is still alive after processing all the requests
   struct timeval timeout;
   timeout.tv_sec = 0;
   timeout.tv_usec = socket_timeout_usecs;
-  setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
-
-  memset(&serv_addr, '0', sizeof(serv_addr));
-
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(net_port);
-  serv_addr.sin_addr.s_addr = inet_addr(net_ip);
-
-  //This piece of code is only used for targets that send responses to a specific port number
-  //The Kamailio SIP server is an example. After running this code, the intialized sockfd 
-  //will be bound to the given local port
-  if(local_port > 0) {
-    local_serv_addr.sin_family = AF_INET;
-    local_serv_addr.sin_addr.s_addr = INADDR_ANY;
-    local_serv_addr.sin_port = htons(local_port);
-
-    local_serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    if (bind(sockfd, (struct sockaddr*) &local_serv_addr, sizeof(struct sockaddr_in)))  {
-      FATAL("Unable to bind socket on local source port");
-    }
-  }
-
-  if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    //If it cannot connect to the server under test
-    //try it again as the server initial startup time is varied
-    for (n=0; n < 1000; n++) {
-      if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == 0) break;
-      usleep(1000);
-    }
-    if (n== 1000) {
-      close(sockfd);
-      return 1;
-    }
-  }
 
   //retrieve early server response if needed
-  if (net_recv(sockfd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) goto HANDLE_RESPONSES;
+  if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) goto HANDLE_RESPONSES;
 
   //write the request messages
   kliter_t(lms) *it;
   messages_sent = 0;
 
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
-    n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
+    n = net_send(hci_fd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
 
     //Allocate memory to store new accumulated response buffer size
@@ -1081,7 +1029,7 @@ int send_over_network()
 
     //retrieve server response
     u32 prev_buf_size = response_buf_size;
-    if (net_recv(sockfd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) {
+    if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) {
       goto HANDLE_RESPONSES;
     }
 
@@ -1096,7 +1044,7 @@ int send_over_network()
 
 HANDLE_RESPONSES:
 
-  net_recv(sockfd, timeout, poll_wait_msecs, &response_buf, &response_buf_size);
+  net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size);
 
   if (messages_sent > 0 && response_bytes != NULL) {
     response_bytes[messages_sent - 1] = response_buf_size;
@@ -1107,8 +1055,6 @@ HANDLE_RESPONSES:
   while(1) {
     if (has_new_bits(session_virgin_bits) != 2) break;
   }
-
-  close(sockfd);
 
   if (likely_buggy && false_negative_reduction) return 0;
 
@@ -1123,6 +1069,7 @@ HANDLE_RESPONSES:
   return 0;
 }
 /* End of AFLNet-specific variables & functions */
+
 
 /* Get unix time in milliseconds */
 
@@ -3258,6 +3205,9 @@ static u8 run_target(char** argv, u32 timeout) {
 
     /* In non-dumb mode, we have the fork server up and running, so simply
        tell it to have at it, and then read back PID. */
+    
+    /* In Buzzer mode, the target forkserver will connect to us via unix 
+      domain socket upon creation. Its child instances will reuse the same socket.*/
 
     if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
 

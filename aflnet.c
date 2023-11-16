@@ -385,7 +385,7 @@ region_t* extract_requests_SNMP(unsigned char* buf, unsigned int buf_size, unsig
     regions = (region_t *)ck_realloc(regions, sizeof(region_t));
     regions[0].start_byte = 0;
     regions[0].end_byte = buf_size - 1;
-    regions[0].state_sequence = NULL;
+    regions[0].= NULL;
     regions[0].state_count = 0;
 
     region_count = 1;
@@ -394,7 +394,6 @@ region_t* extract_requests_SNMP(unsigned char* buf, unsigned int buf_size, unsig
   *region_count_ref = region_count;
   return regions;
 }
-
 
 region_t* extract_requests_smtp(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
