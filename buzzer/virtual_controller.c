@@ -4,6 +4,8 @@
 #include "bluetooth.h"
 #include "buzzer_packet_log.h"
 #include "buzzer_config.h"
+#include "tinycrypt/ecc.h"
+#include "tinycrypt/ecc_dh.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -22,6 +24,8 @@ typedef struct host_t {
     FILE* log;
     u8 bd_addr[6];
     u8 random_address[6];
+    u8 public_key[64];
+    u8 private_key[32];
 
     bool scan_enabled, adv_enabled;
     struct bt_hci_cmd_le_set_adv_parameters adv_params;
@@ -83,6 +87,17 @@ static void send_command_status(int this, u16 opcode)
                                   { .iov_base = &evt, .iov_len = sizeof(evt) },
                                   { .iov_base = &cs, .iov_len = sizeof(cs) } };
     writev(hosts[this].socket_fd, iov, 3);
+}
+
+static void send_le_meta(int this, u8 opcode, void* payload, int size)
+{
+    u8 type = BT_H4_EVT_PKT;
+    struct bt_hci_evt_hdr evt = { .evt = BT_HCI_EVT_LE_META_EVENT, .plen = size + 1 };
+    struct iovec iov[]        = { { .iov_base = &type,      .iov_len = 1 },
+                                  { .iov_base = &evt,       .iov_len = sizeof(evt) },
+                                  { .iov_base = &opcode,    .iov_len = 1 },
+                                  { .iov_base = payload,    .iov_len = size} };
+    writev(hosts[this].socket_fd, iov, 4);
 }
 
 static void handle_cmd_reset(int this, struct bt_hci_cmd_hdr* cmd)
@@ -250,6 +265,11 @@ static void handle_le_set_event_mask(int this, struct bt_hci_cmd_hdr* cmd)
 static void handle_le_read_local_pk256(int this, struct bt_hci_cmd_hdr* cmd)
 {
     send_command_status(this, cmd->opcode);
+    struct bt_hci_evt_le_read_local_pk256_complete rsp = {
+        .status = BT_HCI_ERR_SUCCESS
+    };
+    memcpy(rsp.local_pk256, hosts[this].public_key, sizeof(rsp.local_pk256));
+    send_le_meta(this, BT_HCI_EVT_LE_READ_LOCAL_PK256_COMPLETE, &rsp ,sizeof(rsp));
 }
 
 static void handle_le_set_random_address(int this, struct bt_hci_cmd_hdr* cmd)
@@ -370,6 +390,8 @@ void bz_vctrl_start_record()
         pfd[i].events = POLLIN;
     }
 
+    static adv_report_sent = false;
+
     while (1)
     {
         int rv = poll(pfd, 2, 0);
@@ -381,6 +403,14 @@ void bz_vctrl_start_record()
                 if (n > 0)
                 {
                     handle_data(i, temp_buf, n);
+                }
+            }
+            else 
+            {
+                if (hosts[i].scan_enabled && hosts[1 - i].adv_enabled && !adv_report_sent)
+                {
+                    send_adv_report(hosts[i].socket_fd, &hosts[1-i]);
+                    adv_report_sent = true;
                 }
             }
         }
@@ -395,13 +425,14 @@ static int init_host(host_t* host, int sk, const char* name, const char* path)
     {
         setsid();
         char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
-        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/buzzer.so", 1);
+        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
         execv(path, argv);
     }
     else 
     {
         host->log = init_packet_log(name);
         host->socket_fd = accept(sk, 0, 0);
+        uECC_make_key(host->public_key, host->private_key, uECC_secp256r1());
         OKF("HCI Socket connected");
     }
 }

@@ -272,5 +272,15 @@
     "directory": "/home/xaz/Documents/aflnet",
     "file": "/home/xaz/Documents/aflnet/test-instr.c",
     "output": "/home/xaz/Documents/aflnet/test-instr"
+  },
+  {
+    "directory": "/home/xaz/Documents/aflnet/buzzer/build",
+    "command": "/usr/bin/cc  -I/home/xaz/Documents/aflnet/buzzer/. -I/home/xaz/Documents/aflnet/buzzer/tinycrypt/lib/include  -o CMakeFiles/buzzer.dir/virtual_controller.c.o -c /home/xaz/Documents/aflnet/buzzer/virtual_controller.c",
+    "file": "/home/xaz/Documents/aflnet/buzzer/virtual_controller.c"
+  },
+  {
+    "directory": "/home/xaz/Documents/aflnet/buzzer/build",
+    "command": "/usr/bin/cc -Dbuzzer_socket_EXPORTS  -fPIC -m32 -o CMakeFiles/buzzer_socket.dir/buzzer_socket.c.o -c /home/xaz/Documents/aflnet/buzzer/buzzer_socket.c",
+    "file": "/home/xaz/Documents/aflnet/buzzer/buzzer_socket.c"
   }
 ]
