@@ -83,12 +83,9 @@ static inline void log_packet(FILE* f, u8 packet_type, u8 in, u8* packet, u16 le
     struct PacketLogHeader header;
     setup_log_header(&header, tv_sec, tv_us, packet_type, in, len);
 
-    struct iovec iov[] = {
-        {.iov_base = &header, .iov_len = sizeof(header)},
-        {.iov_base = packet, .iov_len = len}
-    };
-    fwrite(&header, sizeof(header), 1, f);
+    fwrite(&header, 1, sizeof(header), f);
     fwrite(packet, 1, len, f);
+    fflush(f);
 }
 
 

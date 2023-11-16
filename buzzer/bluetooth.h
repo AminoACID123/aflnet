@@ -27,6 +27,7 @@
 struct bt_hci_cmd_hdr {
 	uint16_t opcode;
 	uint8_t  plen;
+	uint8_t params[];
 } __packed;
 
 struct bt_hci_acl_hdr {

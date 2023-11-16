@@ -21,6 +21,13 @@ typedef struct host_t {
     int socket_fd;
     FILE* log;
     u8 bd_addr[6];
+    u8 random_address[6];
+
+    bool scan_enabled, adv_enabled;
+    struct bt_hci_cmd_le_set_adv_parameters adv_params;
+    struct bt_hci_cmd_le_set_scan_parameters scan_params;
+    struct bt_hci_cmd_le_set_adv_data adv_data;
+    struct bt_hci_cmd_le_set_scan_rsp_data scan_data;
 }host_t;
 
 static host_t hosts[2] = {
@@ -127,7 +134,14 @@ static void handle_read_bd_addr(int this, struct bt_hci_cmd_hdr* cmd)
 }
 
 static void handle_read_buffer_size(int this, struct bt_hci_cmd_hdr* cmd) {
-
+    struct bt_hci_rsp_read_buffer_size rsp = {
+        .status = BT_HCI_ERR_SUCCESS,
+        .acl_mtu = BZ_ACL_MTU,
+        .acl_max_pkt = BZ_ACL_MAX_PKT,
+        .sco_mtu = BZ_SCO_MTU,
+        .sco_max_pkt = BZ_SCO_MAX_PKT
+    };
+    send_command_complete(this, cmd->opcode, &rsp, sizeof(rsp));   
 }
 
 static void handle_read_local_features(int this, struct bt_hci_cmd_hdr* cmd) {
@@ -241,7 +255,50 @@ static void handle_le_read_local_pk256(int this, struct bt_hci_cmd_hdr* cmd)
 static void handle_le_set_random_address(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
+    memcpy(hosts[this].random_address, cmd->params, 6);
     send_command_complete(this, cmd->opcode, &status, sizeof(status));          
+}
+
+static void handle_le_set_adv_parameters(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    memcpy(cmd->params, &hosts[this].adv_params, cmd->plen);
+    send_command_complete(this, cmd->opcode, &status, sizeof(status));   
+}
+
+static void handle_le_set_scan_parameters(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    memcpy(cmd->params, &hosts[this].scan_params, cmd->plen);
+    send_command_complete(this, cmd->opcode, &status, sizeof(status));      
+}
+
+static void handle_le_set_adv_data(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    memcpy(cmd->params, &hosts[this].adv_data, cmd->plen);
+    send_command_complete(this, cmd->opcode, &status, sizeof(status)); 
+}
+
+static void handle_le_set_scan_enable(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    hosts[this].scan_enabled = cmd->params[0];
+    send_command_complete(this, cmd->opcode, &status, sizeof(status));    
+}
+
+static void handle_le_set_scan_rsp_data(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    memcpy(cmd->params, &hosts[this].scan_data, cmd->plen);
+    send_command_complete(this, cmd->opcode, &status, sizeof(status));    
+}
+
+static void handle_le_set_adv_enable(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    u8 status = BT_HCI_ERR_SUCCESS;
+    hosts[this].adv_enabled = cmd->params[0];
+    send_command_complete(this, cmd->opcode, &status, sizeof(status));    
 }
 
 static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
@@ -275,6 +332,12 @@ static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
     case BT_HCI_CMD_LE_SET_EVENT_MASK: handle_le_set_event_mask(this, cmd); break;
     case BT_HCI_CMD_LE_READ_LOCAL_PK256: handle_le_read_local_pk256(this, cmd); break;
     case BT_HCI_CMD_LE_SET_RANDOM_ADDRESS: handle_le_set_random_address(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_ADV_PARAMETERS: handle_le_set_adv_parameters(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_SCAN_PARAMETERS: handle_le_set_scan_parameters(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_ADV_DATA: handle_le_set_adv_data(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_SCAN_ENABLE: handle_le_set_scan_enable(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_SCAN_RSP_DATA: handle_le_set_scan_rsp_data(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_ADV_ENABLE: handle_le_set_adv_enable(this, cmd); break;
     default: FATAL("Unhandled command: 0x%x", cmd->opcode);
     }
 }
@@ -286,7 +349,7 @@ static void handle_acl(int this, struct bt_hci_acl_hdr* acl, int size)
 
 static void handle_data(int this, char* data, int size)
 {
-    log_packet(hosts[this].log, data[0], true, &data[1], size-1);
+    log_packet(hosts[this].log, data[0], true, &data[1], size - 1);
     switch (data[0])
     {
     case BT_H4_CMD_PKT: handle_cmd(this, (struct bt_hci_cmd_hdr*)&data[1], size - 1); break;
@@ -309,7 +372,7 @@ void bz_vctrl_start_record()
 
     while (1)
     {
-        int rv = poll(pfd, 2, 1);
+        int rv = poll(pfd, 2, 0);
         for (int i = 0; i < 2; i++)
         {
             if (pfd[i].revents & POLLIN)
@@ -374,7 +437,7 @@ int main(int argc, char** argv)
     listen(sk, 3);
 
     init_signal_handlers();
-    init_host(&hosts[0], sk, "host1.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
-    init_host(&hosts[1], sk, "host2.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
+    init_host(&hosts[0], sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
+    init_host(&hosts[1], sk, "peripheral_ots.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
     bz_vctrl_start_record();
 }
