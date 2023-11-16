@@ -24,3 +24,4 @@ afl-llvm-rt.o
 in-dns
 out-dns
 work
+*.pklg
