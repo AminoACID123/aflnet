@@ -53,17 +53,26 @@ static u8 hci_buffer[BZ_BUFFER_SIZE];
 #define PB_START                    0x02
 #define PB_COMPLETE                 0x03
 
+#define BIT(nr)                     (1UL << (nr))
+#define BIT_MASK(n)                 (BIT(n) - 1UL)
+#define BT_ACL_HANDLE_MASK          BIT_MASK(12)
 
+#define acl_handle(h)               ((h) & BT_ACL_HANDLE_MASK)
+#define acl_flags(h)                ((h) >> 12)
+#define acl_flags_pb(f)             ((f) & BIT_MASK(2))
+#define acl_flags_bc(f)             ((f) >> 2)
+#define acl_handle_pack(h, f)       ((h) | ((f) << 12))
 
 static void stop(int sig)
 {
+    WARNF("Stopped with signal %d", sig);
     unlink(BZ_HCI_SOCKET);
     for (int i=0;i<2;i++)
     {
         if (hosts[i].pid > 0)
         {
             kill(hosts[i].pid, SIGKILL);
-            OKF("Stopped host: %d", hosts[i].pid);
+            OKF("Stopped host: %s:%d", hosts[i].path, hosts[i].pid);
         }
     }
     raise(sig);
@@ -71,13 +80,14 @@ static void stop(int sig)
 
 static void at_exit()
 {
+    WARNF("Stopped");
     unlink(BZ_HCI_SOCKET);
     for (int i=0;i<2;i++)
     {
         if (hosts[i].pid > 0)
         {
             kill(hosts[i].pid, SIGKILL);
-            OKF("Stopped host: %d", hosts[i].pid);
+            OKF("Stopped host: %s: %d", hosts[i].path, hosts[i].pid);
         }
     }
 }
@@ -94,7 +104,7 @@ static void send_command_complete(int this, uint16_t opcode, void* payload, int 
                                           { .iov_base = payload, .iov_len = size } };
    
     int n = writev(hosts[this].socket_fd, iov, 4);
-    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
 }
 
 static void send_command_status(int this, u8 status, u16 opcode)
@@ -107,7 +117,7 @@ static void send_command_status(int this, u8 status, u16 opcode)
                                   { .iov_base = &cs, .iov_len = sizeof(cs) } };
 
     int n = writev(hosts[this].socket_fd, iov, 3);
-    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
 }
 
 static void send_command_status_success(int this, u16 opcode)
@@ -125,7 +135,29 @@ static void send_le_meta(int this, u8 opcode, void* payload, int size)
                                   { .iov_base = payload,    .iov_len = size} };
     
     int n = writev(hosts[this].socket_fd, iov, 4);
-    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
+}
+
+static void send_event(int this, u16 opcode, void* payload, int size)
+{
+    u8 type = BT_H4_EVT_PKT;
+    struct bt_hci_evt_hdr evt = { .evt = opcode, .plen = size };
+    struct iovec iov[]        = { { .iov_base = &type,      .iov_len = 1 },
+                                  { .iov_base = &evt,       .iov_len = sizeof(evt) },
+                                  { .iov_base = payload,    .iov_len = size} };
+    
+    int n = writev(hosts[this].socket_fd, iov, 3);
+    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
+}
+
+static void send_num_completed_packets(int this, u16 handle, u32 n)
+{
+    struct bt_hci_evt_num_completed_packets e = {
+        .count = n,
+        .handle = handle,
+        .num_handles = 1
+    };
+    send_event(this, BT_HCI_EVT_NUM_COMPLETED_PACKETS, &e, sizeof(e));
 }
 
 static void handle_cmd_default(int this, struct bt_hci_cmd_hdr* cmd)
@@ -416,20 +448,28 @@ static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
 
 static u16 convert_acl_handle(u16 handle)
 {
-
+    u8 flags = acl_flags(handle);
+    u8 pb = acl_flags_pb(flags);
+    u8 bc = acl_flags_bc(flags);
+    handle = acl_handle(handle);
+    if (pb == PB_START_NO_FLUSH)
+        pb = PB_START;
+    else if (pb == PB_CONT) FATAL("");
+    else FATAL("");
+    return acl_handle_pack(handle, (pb) | (bc << 2));
 }
 
 static void handle_acl(int this, struct bt_hci_acl_hdr* acl, int size)
 {
-    send(hosts[1 - this].socket_fd, &((char*)acl)[-1], size + 1, 0);
-
+    send_num_completed_packets(this, acl_handle(acl->handle), 1);
     acl->handle = convert_acl_handle(acl->handle);
-    log_packet(hosts[1 - this].log_fd, BT_H4_ACL_PKT, true, (u8*)acl, size);
+    write(hosts[1 - this].socket_fd, &((char*)acl)[-1], size + 1);
+    pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, size);
 }
 
 static void handle_data(int this, char* data, int size)
 {
-    log_packet(hosts[this].log_fd, data[0], false, &data[1], size - 1);
+    pklg_write_packet(hosts[this].log_fd, data[0], false, &data[1], size - 1);
     switch (data[0])
     {
     case BT_H4_CMD_PKT: handle_cmd(this, (struct bt_hci_cmd_hdr*)&data[1], size - 1); break;
@@ -487,7 +527,7 @@ void bz_vctrl_start_record()
     int n                      = 0;
     char* temp_buf             = calloc(BZ_BUFFER_SIZE, 1);
     struct pollfd pfd[2];
-    OKF("Virtual Controller start relaying packets");
+    OKF("Virtual Controller start recording packets");
     for (int i = 0; i < 2; i++)
     {
         pfd[i].fd     = hosts[i].socket_fd;
@@ -522,7 +562,7 @@ void bz_vctrl_start_record()
     }
 }
 
-static int init_host(host_t* host, int sk, const char* name, const char* path)
+static int init_host_record(host_t* host, int sk, const char* name, const char* path)
 {
     host->path = path;
     host->pid = fork();
@@ -535,12 +575,57 @@ static int init_host(host_t* host, int sk, const char* name, const char* path)
     }
     else 
     {
-        host->log_fd = init_packet_log(name);
+        host->log_fd = pklg_write_init(name);
         host->socket_fd = accept(sk, 0, 0);
         uECC_make_key(host->public_key, host->private_key, uECC_secp256r1());
         OKF("HCI Socket connected");
     }
 }
+
+static int bz_vctrl_start_replay(int sk, const char* name, const char* path)
+{
+    int n, log_fd, socket_fd;
+    pid_t pid ;
+    pid = hosts[0].pid = fork();
+    if (!pid)
+    {
+        setsid();
+        char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
+        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        execv(path, argv);
+    }
+    else 
+    {
+        log_fd = pklg_read_init(name);
+        socket_fd = accept(sk, 0, 0);
+        OKF("HCI Socket connected");
+    }
+
+    struct pollfd pfd          = { .fd = socket_fd, .events = POLLIN };
+
+    OKF("Virtual Controller start replaying packets");
+
+    u8 pklg_buffer[BZ_BUFFER_SIZE];
+    struct PacketLogHeader header;
+    while(pklg_read_header(log_fd, &header))
+    {
+        if (header.type == PKLG_COMMAND || header.type == PKLG_ACL_HS_TO_CTRL) 
+        {
+            poll(&pfd, 1, 0);
+            read(log_fd, pklg_buffer, header.length - 9);
+            read(socket_fd, hci_buffer, header.length - 8);
+            if (memcmp(&hci_buffer[1], pklg_buffer, header.length - 9))
+                FATAL("Packet log unmatch %0x %0x", hci_buffer[1], pklg_buffer[0]);
+        }
+        else if (header.type == PKLG_EVENT || header.type == PKLG_ACL_CTRL_TO_HS) 
+        {
+            *hci_buffer = (header.type == PKLG_EVENT ? BT_H4_EVT_PKT : BT_H4_ACL_PKT);
+            read(log_fd, &hci_buffer[1], header.length - 9);
+            write(socket_fd, hci_buffer, header.length - 8);
+        }
+    }
+}
+
 
 static void init_signal_handlers()
 {
@@ -573,7 +658,9 @@ int main(int argc, char** argv)
     listen(sk, 3);
 
     init_signal_handlers();
-    init_host(&hosts[0], sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
-    init_host(&hosts[1], sk, "peripheral_ots.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
-    bz_vctrl_start_record();
+    // init_host_record(&hosts[0], sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
+    // init_host_record(&hosts[1], sk, "peripheral_ots.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
+    // bz_vctrl_start_record();
+
+    bz_vctrl_start_replay(sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
 }

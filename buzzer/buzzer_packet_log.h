@@ -40,25 +40,30 @@ static inline u32 to_big_endian(u32 value)
 
 struct __packed PacketLogHeader
 {
-    u32 length_;
-    u32 tv_sec_;
-    u32 tv_us_;
-    u8 type_;
+    u32 length;
+    u32 tv_sec;
+    u32 tv_us;
+    u8 type;
 };
 
-static inline int init_packet_log(const char* fname)
+static inline int pklg_write_init(const char* fname)
 {
     return fileno(fopen(fname, "wb"));
 }
 
-static inline void setup_log_header(struct PacketLogHeader* log, u8 type, bool ctrl_to_hs, u16 len)
+static inline int pklg_read_init(const char* fname)
+{
+    return fileno(fopen(fname, "rb"));
+}
+
+static inline void pklg_write_header(struct PacketLogHeader* header, u8 type, bool ctrl_to_hs, u16 len)
 {
     struct timeval curr_time;
     gettimeofday(&curr_time, NULL);
 
-    log->length_ = to_big_endian(len + 9);
-    log->tv_sec_ = to_big_endian(curr_time.tv_sec);
-    log->tv_us_ = to_big_endian(curr_time.tv_usec);
+    header->length = to_big_endian(len + 9);
+    header->tv_sec = to_big_endian(curr_time.tv_sec);
+    header->tv_us = to_big_endian(curr_time.tv_usec);
 
     static u8 h4_to_pklg_map[][2] = {
         {},
@@ -67,14 +72,20 @@ static inline void setup_log_header(struct PacketLogHeader* log, u8 type, bool c
         {PKLG_SCO_HS_TO_CTRL, PKLG_SCO_CTRL_TO_HS},
         {PKLG_EVENT, PKLG_EVENT},
     };
-    log->type_ = h4_to_pklg_map[type][ctrl_to_hs];
-    
+    header->type = h4_to_pklg_map[type][ctrl_to_hs];
 }
 
-static inline void log_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
+static inline bool pklg_read_header(int fd, struct PacketLogHeader* header)
+{
+    int n = read(fd, header, sizeof(struct PacketLogHeader));
+    header->length = to_big_endian(header->length);
+    return n == sizeof(struct PacketLogHeader);
+}
+
+static inline void pklg_write_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
 {
     struct PacketLogHeader header;
-    setup_log_header(&header, type, in, len);
+    pklg_write_header(&header, type, in, len);
     struct iovec iov[] = {
         {.iov_base = &header, .iov_len = sizeof(header)},
         {.iov_base = packet, .iov_len = len}
@@ -82,13 +93,18 @@ static inline void log_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
     writev(fd, iov, 2);
 }
 
-static inline void log_packet_v(int fd, u8 type, bool in, struct iovec* iov, u32 n, u32 len)
+static inline void pklg_write_packet_v(int fd, u8 type, bool in, struct iovec* iov, u32 n, u32 len)
 {
     struct PacketLogHeader header;
-    setup_log_header(&header, type, in, len);
+    pklg_write_header(&header, type, in, len);
     write(fd, &header, sizeof(header));
     writev(fd, iov, n);
 }
 
+static inline void pklg_read_packet(int fd, struct PacketLogHeader* header, u8* buffer)
+{
+    *buffer = header->type;
+    read(fd, &buffer[1], header->length - 9);
+}
 
 #endif 
