@@ -46,18 +46,19 @@ struct __packed PacketLogHeader
     u8 type_;
 };
 
-static inline FILE* init_packet_log(const char* fname)
+static inline int init_packet_log(const char* fname)
 {
-    return fopen(fname, "wb");
+    return fileno(fopen(fname, "wb"));
 }
 
-static inline void setup_log_header(struct PacketLogHeader* log, 
-    u32 tv_sec, u32 tv_us, u8 type, bool ctrl_to_hs, u16 len)
+static inline void setup_log_header(struct PacketLogHeader* log, u8 type, bool ctrl_to_hs, u16 len)
 {
+    struct timeval curr_time;
+    gettimeofday(&curr_time, NULL);
 
     log->length_ = to_big_endian(len + 9);
-    log->tv_sec_ = to_big_endian(tv_sec);
-    log->tv_us_ = to_big_endian( tv_us);
+    log->tv_sec_ = to_big_endian(curr_time.tv_sec);
+    log->tv_us_ = to_big_endian(curr_time.tv_usec);
 
     static u8 h4_to_pklg_map[][2] = {
         {},
@@ -69,23 +70,24 @@ static inline void setup_log_header(struct PacketLogHeader* log,
     log->type_ = h4_to_pklg_map[type][ctrl_to_hs];
     
 }
-static inline void log_packet(FILE* f, u8 packet_type, u8 in, u8* packet, u16 len)
+
+static inline void log_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
 {
-    u32 tv_sec = 0;
-    u32 tv_us = 0;
-
-    // get time
-    struct timeval curr_time;
-    gettimeofday(&curr_time, NULL);
-    tv_sec = curr_time.tv_sec;
-    tv_us = curr_time.tv_usec;
-
     struct PacketLogHeader header;
-    setup_log_header(&header, tv_sec, tv_us, packet_type, in, len);
+    setup_log_header(&header, type, in, len);
+    struct iovec iov[] = {
+        {.iov_base = &header, .iov_len = sizeof(header)},
+        {.iov_base = packet, .iov_len = len}
+    };
+    writev(fd, iov, 2);
+}
 
-    fwrite(&header, 1, sizeof(header), f);
-    fwrite(packet, 1, len, f);
-    fflush(f);
+static inline void log_packet_v(int fd, u8 type, bool in, struct iovec* iov, u32 n, u32 len)
+{
+    struct PacketLogHeader header;
+    setup_log_header(&header, type, in, len);
+    write(fd, &header, sizeof(header));
+    writev(fd, iov, n);
 }
 
 

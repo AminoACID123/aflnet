@@ -56,6 +56,7 @@ struct bt_hci_iso_data_start {
 struct bt_hci_evt_hdr {
 	uint8_t  evt;
 	uint8_t  plen;
+	uint8_t	 params[];
 } __packed;
 
 #define BT_HCI_CMD_NOP				0x0000
@@ -2557,6 +2558,7 @@ struct bt_hci_evt_qos_setup_complete {
 struct bt_hci_evt_cmd_complete {
 	uint8_t  ncmd;
 	uint16_t opcode;
+	uint8_t	 params[];
 } __packed;
 
 #define BT_HCI_EVT_CMD_STATUS			0x0f

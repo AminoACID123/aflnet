@@ -5,8 +5,10 @@ project("Buzzer")
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
 add_executable(buzzer virtual_controller.c)
-target_link_directories(buzzer PRIVATE tinycrypt/lib)
-target_include_directories(buzzer PRIVATE . tinycrypt/lib/include)
+file(GLOB TINYCRYPT_SRC ${CMAKE_SOURCE_DIR}/tinycrypt/lib/source/*.c)
+add_library(tinycrypt STATIC ${TINYCRYPT_SRC})
+target_include_directories(tinycrypt PUBLIC ${CMAKE_SOURCE_DIR}/tinycrypt/lib/include)
+
 target_link_libraries(buzzer tinycrypt)
 
 add_library(buzzer_socket SHARED buzzer_socket.c)

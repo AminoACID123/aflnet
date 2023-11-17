@@ -21,7 +21,7 @@ typedef struct host_t {
     const char* path;
     pid_t pid;
     int socket_fd;
-    FILE* log;
+    int log_fd;
     u8 bd_addr[6];
     u8 random_address[6];
     u8 public_key[64];
@@ -32,11 +32,28 @@ typedef struct host_t {
     struct bt_hci_cmd_le_set_scan_parameters scan_params;
     struct bt_hci_cmd_le_set_adv_data adv_data;
     struct bt_hci_cmd_le_set_scan_rsp_data scan_data;
-}host_t;
+} host_t;
 
 static host_t hosts[2] = {
-    {.bd_addr = "11111"}, {.bd_addr = "22222"}
+    {.bd_addr = "111111"}, {.bd_addr = "222222"}
 };
+
+static u8 hci_buffer[BZ_BUFFER_SIZE];
+
+#define BD_ADDR_TYPE_PUBLIC 0
+#define BD_ADDR_TYPE_RANDOM 1
+#define BD_ADDR_TYPE_PUBLIC_ID  2
+#define BD_ADDR_TYPE_RANDOM_ID  3
+
+#define HCI_ROLE_CENTRAL 0
+#define HCI_ROLE_PERIPHERAL 1
+
+#define PB_START_NO_FLUSH           0x00
+#define PB_CONT                     0x01
+#define PB_START                    0x02
+#define PB_COMPLETE                 0x03
+
+
 
 static void stop(int sig)
 {
@@ -75,18 +92,27 @@ static void send_command_complete(int this, uint16_t opcode, void* payload, int 
                                           { .iov_base = &evt, .iov_len = sizeof(evt) },
                                           { .iov_base = &cc, .iov_len = sizeof(cc) },
                                           { .iov_base = payload, .iov_len = size } };
-    writev(hosts[this].socket_fd, iov, 4);
+   
+    int n = writev(hosts[this].socket_fd, iov, 4);
+    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
 }
 
-static void send_command_status(int this, u16 opcode)
+static void send_command_status(int this, u8 status, u16 opcode)
 {
     u8 type                         = BT_H4_EVT_PKT;
-    struct bt_hci_evt_cmd_status cs = { .ncmd = 10, .opcode = opcode, .status = 0 };
+    struct bt_hci_evt_cmd_status cs = { .ncmd = 10, .opcode = opcode, .status = status };
     struct bt_hci_evt_hdr evt = { .evt = BT_HCI_EVT_CMD_STATUS, .plen = sizeof(cs) };
     struct iovec iov[]        = { { .iov_base = &type, .iov_len = 1 },
                                   { .iov_base = &evt, .iov_len = sizeof(evt) },
                                   { .iov_base = &cs, .iov_len = sizeof(cs) } };
-    writev(hosts[this].socket_fd, iov, 3);
+
+    int n = writev(hosts[this].socket_fd, iov, 3);
+    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
+}
+
+static void send_command_status_success(int this, u16 opcode)
+{
+    send_command_status(this, BT_HCI_ERR_SUCCESS, opcode);
 }
 
 static void send_le_meta(int this, u8 opcode, void* payload, int size)
@@ -97,13 +123,19 @@ static void send_le_meta(int this, u8 opcode, void* payload, int size)
                                   { .iov_base = &evt,       .iov_len = sizeof(evt) },
                                   { .iov_base = &opcode,    .iov_len = 1 },
                                   { .iov_base = payload,    .iov_len = size} };
-    writev(hosts[this].socket_fd, iov, 4);
+    
+    int n = writev(hosts[this].socket_fd, iov, 4);
+    log_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
 }
 
-static void handle_cmd_reset(int this, struct bt_hci_cmd_hdr* cmd)
+static void handle_cmd_default(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
     send_command_complete(this, cmd->opcode, &status, sizeof(status));
+}
+
+static void handle_cmd_none(int this, struct bt_hci_cmd_hdr* cmd)
+{
 }
 
 static void handle_read_local_version(int this, struct bt_hci_cmd_hdr* cmd)
@@ -167,17 +199,6 @@ static void handle_read_local_features(int this, struct bt_hci_cmd_hdr* cmd) {
     send_command_complete(this, cmd->opcode, &rsp, sizeof(rsp));
 }
 
-static void handle_set_event_mask(int this, struct bt_hci_cmd_hdr* cmd)
-{
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status));
-}
-
-static void handle_write_erroneous_data_reporting(int this, struct bt_hci_cmd_hdr* cmd) {
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status));   
-}
-
 static void handle_le_rand(int this, struct bt_hci_cmd_hdr* cmd)
 {
     struct bt_hci_rsp_le_rand rsp =  {
@@ -188,12 +209,6 @@ static void handle_le_rand(int this, struct bt_hci_cmd_hdr* cmd)
 }
 
 static void handle_host_buffer_size(int this, struct bt_hci_cmd_hdr* cmd)
-{
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status));     
-}
-
-static void handle_host_flow_ctrl(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
     send_command_complete(this, cmd->opcode, &status, sizeof(status));     
@@ -218,12 +233,6 @@ static void handle_le_read_buffer_size(int this, struct bt_hci_cmd_hdr* cmd)
     send_command_complete(this, cmd->opcode, &rsp, sizeof(rsp));   
 }
 
-static void handle_le_write_host_supported(int this, struct bt_hci_cmd_hdr* cmd)
-{
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status)); 
-}
-
 static void handle_le_read_supported_states(int this, struct bt_hci_cmd_hdr* cmd)
 {
     struct bt_hci_rsp_le_read_supported_states rsp = {
@@ -241,12 +250,6 @@ static void handle_le_read_max_data_length(int this, struct bt_hci_cmd_hdr* cmd)
     send_command_complete(this, cmd->opcode, &rsp, sizeof(rsp));      
 }
 
-static void handle_le_write_default_data_length(int this, struct bt_hci_cmd_hdr* cmd)
-{
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status));     
-}
-
 static void handle_le_read_resolv_list_size(int this, struct bt_hci_cmd_hdr* cmd)
 {
     struct bt_hci_rsp_le_read_resolv_list_size rsp = {
@@ -256,15 +259,9 @@ static void handle_le_read_resolv_list_size(int this, struct bt_hci_cmd_hdr* cmd
     send_command_complete(this, cmd->opcode, &rsp, sizeof(rsp));      
 }
 
-static void handle_le_set_event_mask(int this, struct bt_hci_cmd_hdr* cmd)
-{
-    u8 status = BT_HCI_ERR_SUCCESS;
-    send_command_complete(this, cmd->opcode, &status, sizeof(status));         
-}
-
 static void handle_le_read_local_pk256(int this, struct bt_hci_cmd_hdr* cmd)
 {
-    send_command_status(this, cmd->opcode);
+    send_command_status_success(this, cmd->opcode);
     struct bt_hci_evt_le_read_local_pk256_complete rsp = {
         .status = BT_HCI_ERR_SUCCESS
     };
@@ -282,21 +279,21 @@ static void handle_le_set_random_address(int this, struct bt_hci_cmd_hdr* cmd)
 static void handle_le_set_adv_parameters(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
-    memcpy(cmd->params, &hosts[this].adv_params, cmd->plen);
+    memcpy(&hosts[this].adv_params, cmd->params, cmd->plen);
     send_command_complete(this, cmd->opcode, &status, sizeof(status));   
 }
 
 static void handle_le_set_scan_parameters(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
-    memcpy(cmd->params, &hosts[this].scan_params, cmd->plen);
+    memcpy(&hosts[this].scan_params, cmd->params, cmd->plen);
     send_command_complete(this, cmd->opcode, &status, sizeof(status));      
 }
 
 static void handle_le_set_adv_data(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
-    memcpy(cmd->params, &hosts[this].adv_data, cmd->plen);
+    memcpy(&hosts[this].adv_data, cmd->params, cmd->plen);
     send_command_complete(this, cmd->opcode, &status, sizeof(status)); 
 }
 
@@ -310,7 +307,7 @@ static void handle_le_set_scan_enable(int this, struct bt_hci_cmd_hdr* cmd)
 static void handle_le_set_scan_rsp_data(int this, struct bt_hci_cmd_hdr* cmd)
 {
     u8 status = BT_HCI_ERR_SUCCESS;
-    memcpy(cmd->params, &hosts[this].scan_data, cmd->plen);
+    memcpy(&hosts[this].scan_data, cmd->params, cmd->plen);
     send_command_complete(this, cmd->opcode, &status, sizeof(status));    
 }
 
@@ -319,6 +316,57 @@ static void handle_le_set_adv_enable(int this, struct bt_hci_cmd_hdr* cmd)
     u8 status = BT_HCI_ERR_SUCCESS;
     hosts[this].adv_enabled = cmd->params[0];
     send_command_complete(this, cmd->opcode, &status, sizeof(status));    
+}
+
+static void handle_le_create_conn(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    struct bt_hci_cmd_le_create_conn* create = (struct bt_hci_cmd_le_create_conn*)cmd->params;
+
+    if (create->own_addr_type != BD_ADDR_TYPE_PUBLIC || create->peer_addr_type != BD_ADDR_TYPE_PUBLIC)
+    {
+        FATAL("Cannot handle non-public BD_ADDR");
+    }
+
+    struct bt_hci_evt_le_conn_complete central =  {
+        .status = BT_HCI_ERR_SUCCESS,
+        .handle = 0,
+        .role = HCI_ROLE_CENTRAL,
+        .peer_addr_type = create->peer_addr_type,
+        .interval = create->max_interval,
+        .latency = create->latency,
+        .supv_timeout = create->supv_timeout,
+        .supv_timeout = create->supv_timeout
+    };
+    memcpy(central.peer_addr, create->peer_addr, 6);
+
+    struct bt_hci_evt_le_conn_complete peripheral =  {
+        .status = BT_HCI_ERR_SUCCESS,
+        .handle = 0,
+        .role = HCI_ROLE_PERIPHERAL,
+        .peer_addr_type = create->own_addr_type,
+        .interval = create->max_interval,
+        .latency = create->latency,
+        .supv_timeout = create->supv_timeout,
+        .supv_timeout = create->supv_timeout
+    };
+    memcpy(peripheral.peer_addr, hosts[this].bd_addr, 6);
+
+    send_command_status_success(this, cmd->opcode);
+    send_le_meta(this, BT_HCI_EVT_LE_CONN_COMPLETE, &central, sizeof(central));
+    send_le_meta(1 - this, BT_HCI_EVT_LE_CONN_COMPLETE, &peripheral, sizeof(peripheral));
+}
+
+static void handle_le_read_remote_features(int this, struct bt_hci_cmd_hdr* cmd)
+{
+    send_command_status_success(this, cmd->opcode);
+    struct bt_hci_cmd_le_read_remote_features* rrf = 
+        (struct bt_hci_cmd_le_read_remote_features*)cmd->params;
+    struct bt_hci_evt_le_remote_features_complete rsp = {
+        .status = BT_HCI_ERR_SUCCESS,
+        .handle = rrf->handle,
+        .features = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }
+    };
+    send_le_meta(this, BT_HCI_EVT_LE_REMOTE_FEATURES_COMPLETE, &rsp, sizeof(rsp));
 }
 
 static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
@@ -330,26 +378,26 @@ static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
 
     switch (cmd->opcode)
     {
-    case BT_HCI_CMD_RESET: handle_cmd_reset(this, cmd); break;
+    case BT_HCI_CMD_RESET: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_READ_LOCAL_VERSION: handle_read_local_version(this, cmd); break;
     case BT_HCI_CMD_READ_LOCAL_NAME: handle_read_local_name(this, cmd); break;
     case BT_HCI_CMD_READ_LOCAL_COMMANDS: handle_read_local_commands(this, cmd); break;
     case BT_HCI_CMD_READ_BD_ADDR: handle_read_bd_addr(this, cmd); break;
     case BT_HCI_CMD_READ_BUFFER_SIZE: handle_read_buffer_size(this, cmd); break;
     case BT_HCI_CMD_READ_LOCAL_FEATURES: handle_read_local_features(this, cmd); break;
-    case BT_HCI_CMD_SET_EVENT_MASK: handle_set_event_mask(this, cmd); break;
-    case BT_HCI_CMD_WRITE_ERRONEOUS_REPORTING: handle_write_erroneous_data_reporting(this, cmd); break;
+    case BT_HCI_CMD_SET_EVENT_MASK: handle_cmd_default(this, cmd); break;
+    case BT_HCI_CMD_WRITE_ERRONEOUS_REPORTING: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_LE_RAND: handle_le_rand(this, cmd); break;
     case BT_HCI_CMD_HOST_BUFFER_SIZE: handle_host_buffer_size(this, cmd); break;
-    case BT_HCI_CMD_SET_HOST_FLOW_CONTROL: handle_host_flow_ctrl(this, cmd); break;
+    case BT_HCI_CMD_SET_HOST_FLOW_CONTROL: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_LE_READ_LOCAL_FEATURES: handle_le_local_features(this, cmd); break;
     case BT_HCI_CMD_LE_READ_BUFFER_SIZE: handle_le_read_buffer_size(this, cmd); break;
-    case BT_HCI_CMD_WRITE_LE_HOST_SUPPORTED: handle_le_write_host_supported(this, cmd); break;
+    case BT_HCI_CMD_WRITE_LE_HOST_SUPPORTED: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_LE_READ_SUPPORTED_STATES: handle_le_read_supported_states(this, cmd); break;
     case BT_HCI_CMD_LE_READ_MAX_DATA_LENGTH: handle_le_read_max_data_length(this, cmd); break;
-    case BT_HCI_CMD_LE_WRITE_DEFAULT_DATA_LENGTH: handle_le_write_default_data_length(this, cmd); break;
+    case BT_HCI_CMD_LE_WRITE_DEFAULT_DATA_LENGTH: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_LE_READ_RESOLV_LIST_SIZE: handle_le_read_resolv_list_size(this, cmd); break;
-    case BT_HCI_CMD_LE_SET_EVENT_MASK: handle_le_set_event_mask(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_EVENT_MASK: handle_cmd_default(this, cmd); break;
     case BT_HCI_CMD_LE_READ_LOCAL_PK256: handle_le_read_local_pk256(this, cmd); break;
     case BT_HCI_CMD_LE_SET_RANDOM_ADDRESS: handle_le_set_random_address(this, cmd); break;
     case BT_HCI_CMD_LE_SET_ADV_PARAMETERS: handle_le_set_adv_parameters(this, cmd); break;
@@ -358,24 +406,80 @@ static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
     case BT_HCI_CMD_LE_SET_SCAN_ENABLE: handle_le_set_scan_enable(this, cmd); break;
     case BT_HCI_CMD_LE_SET_SCAN_RSP_DATA: handle_le_set_scan_rsp_data(this, cmd); break;
     case BT_HCI_CMD_LE_SET_ADV_ENABLE: handle_le_set_adv_enable(this, cmd); break;
+    case BT_HCI_CMD_LE_CREATE_CONN: handle_le_create_conn(this, cmd); break;
+    case BT_HCI_CMD_LE_READ_REMOTE_FEATURES: handle_le_read_remote_features(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_PHY: handle_cmd_default(this, cmd); break;
+    case BT_HCI_CMD_HOST_NUM_COMPLETED_PACKETS: handle_cmd_none(this, cmd); break;
     default: FATAL("Unhandled command: 0x%x", cmd->opcode);
     }
+}
+
+static u16 convert_acl_handle(u16 handle)
+{
+
 }
 
 static void handle_acl(int this, struct bt_hci_acl_hdr* acl, int size)
 {
     send(hosts[1 - this].socket_fd, &((char*)acl)[-1], size + 1, 0);
+
+    acl->handle = convert_acl_handle(acl->handle);
+    log_packet(hosts[1 - this].log_fd, BT_H4_ACL_PKT, true, (u8*)acl, size);
 }
 
 static void handle_data(int this, char* data, int size)
 {
-    log_packet(hosts[this].log, data[0], true, &data[1], size - 1);
+    log_packet(hosts[this].log_fd, data[0], false, &data[1], size - 1);
     switch (data[0])
     {
     case BT_H4_CMD_PKT: handle_cmd(this, (struct bt_hci_cmd_hdr*)&data[1], size - 1); break;
     case BT_H4_ACL_PKT: handle_acl(this, (struct bt_hci_acl_hdr*)&data[1], size - 1); break;
     default: FATAL("Unhandled packet type: %d", data[0]);
     }
+}
+
+void emit_adv_report(int i)
+{
+    host_t* this = &hosts[i];
+    host_t* other = &hosts[1 - i];
+
+    struct bt_hci_evt_le_adv_report* report = (struct bt_hci_evt_le_adv_report*)hci_buffer;
+    report->num_reports = 1;
+    report->event_type = other->adv_params.type;
+    report->addr_type = other->adv_params.own_addr_type;
+    report->data_len = other->adv_data.len;
+
+    if (other->adv_params.own_addr_type != BD_ADDR_TYPE_PUBLIC)
+        FATAL("Cannot handle non-public BD_ADDR");
+    else
+        memcpy(report->addr, other->bd_addr, 6);
+
+    memcpy(report->data, other->adv_data.data, report->data_len);
+    report->data[report->data_len] = 0;
+
+    send_le_meta(i, BT_HCI_EVT_LE_ADV_REPORT, report, 1 + sizeof(*report) + report->data_len);
+}
+
+void emit_scan_rsp(int i)
+{
+    host_t* this = &hosts[i];
+    host_t* other = &hosts[1 - i];
+
+    struct bt_hci_evt_le_adv_report* report = (struct bt_hci_evt_le_adv_report*)hci_buffer;
+    report->num_reports = 1;
+    report->event_type = other->adv_params.type;
+    report->addr_type = other->adv_params.own_addr_type;
+    report->data_len = other->scan_data.len;
+
+    if (report->addr_type != BD_ADDR_TYPE_PUBLIC)
+        FATAL("Cannot handle non-public BD_ADDR");
+    else
+        memcpy(report->addr, other->bd_addr, 6);
+
+    memcpy(report->data, other->scan_data.data, report->data_len);
+    report->data[report->data_len] = 0;
+
+    send_le_meta(i, BT_HCI_EVT_LE_ADV_REPORT, report, 1 + sizeof(*report) + report->data_len);
 }
 
 void bz_vctrl_start_record()
@@ -390,7 +494,7 @@ void bz_vctrl_start_record()
         pfd[i].events = POLLIN;
     }
 
-    static adv_report_sent = false;
+    static bool adv_report_sent = false;
 
     while (1)
     {
@@ -409,7 +513,8 @@ void bz_vctrl_start_record()
             {
                 if (hosts[i].scan_enabled && hosts[1 - i].adv_enabled && !adv_report_sent)
                 {
-                    send_adv_report(hosts[i].socket_fd, &hosts[1-i]);
+                    emit_adv_report(i);
+                    emit_scan_rsp(i);
                     adv_report_sent = true;
                 }
             }
@@ -430,7 +535,7 @@ static int init_host(host_t* host, int sk, const char* name, const char* path)
     }
     else 
     {
-        host->log = init_packet_log(name);
+        host->log_fd = init_packet_log(name);
         host->socket_fd = accept(sk, 0, 0);
         uECC_make_key(host->public_key, host->private_key, uECC_secp256r1());
         OKF("HCI Socket connected");
