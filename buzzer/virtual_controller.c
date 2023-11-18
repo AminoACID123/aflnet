@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <unistd.h>
 
 typedef struct host_t {
     const char* path;
@@ -92,7 +93,7 @@ static void at_exit()
     }
 }
 
-static void send_command_complete(int this, uint16_t opcode, void* payload, int size)
+static void send_command_complete(int this, u16 opcode, void* payload, int size)
 {
     u8 type                           = BT_H4_EVT_PKT;
     struct bt_hci_evt_cmd_complete cc = { .ncmd = 10, .opcode = opcode };
@@ -104,7 +105,7 @@ static void send_command_complete(int this, uint16_t opcode, void* payload, int 
                                           { .iov_base = payload, .iov_len = size } };
    
     int n = writev(hosts[this].socket_fd, iov, 4);
-    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
 }
 
 static void send_command_status(int this, u8 status, u16 opcode)
@@ -117,7 +118,7 @@ static void send_command_status(int this, u8 status, u16 opcode)
                                   { .iov_base = &cs, .iov_len = sizeof(cs) } };
 
     int n = writev(hosts[this].socket_fd, iov, 3);
-    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
 }
 
 static void send_command_status_success(int this, u16 opcode)
@@ -135,7 +136,7 @@ static void send_le_meta(int this, u8 opcode, void* payload, int size)
                                   { .iov_base = payload,    .iov_len = size} };
     
     int n = writev(hosts[this].socket_fd, iov, 4);
-    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 3, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
 }
 
 static void send_event(int this, u16 opcode, void* payload, int size)
@@ -147,7 +148,7 @@ static void send_event(int this, u16 opcode, void* payload, int size)
                                   { .iov_base = payload,    .iov_len = size} };
     
     int n = writev(hosts[this].socket_fd, iov, 3);
-    pklg_write_packet_v(hosts[this].log_fd, type, false, &iov[1], 2, n - 1);
+    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
 }
 
 static void send_num_completed_packets(int this, u16 handle, u32 n)
@@ -401,11 +402,24 @@ static void handle_le_read_remote_features(int this, struct bt_hci_cmd_hdr* cmd)
     send_le_meta(this, BT_HCI_EVT_LE_REMOTE_FEATURES_COMPLETE, &rsp, sizeof(rsp));
 }
 
-static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
+static void handle_le_set_phy(int this, struct bt_hci_cmd_hdr* cmd)
 {
-    if (cmd->plen + sizeof(struct bt_hci_cmd_hdr) != size){
-        u8* p = ((u8*)cmd) + 3;
-        FATAL("Incorrect size for hci command: expected %d, recv %d", cmd->plen, size);
+    struct bt_hci_cmd_le_set_phy* sp = ( struct bt_hci_cmd_le_set_phy* )cmd->params;
+    struct bt_hci_evt_le_phy_update_complete rsp = {
+        .status = BT_HCI_ERR_SUCCESS,
+        .handle = sp->handle,
+        .rx_phy = sp->rx_phys,
+        .tx_phy = sp->tx_phys
+    };
+    send_command_status_success(this, cmd->opcode);
+    send_le_meta(this, BT_HCI_EVT_LE_PHY_UPDATE_COMPLETE, &rsp, sizeof(rsp));
+}
+
+static u32 handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
+{
+    u32 actual_size = cmd->plen + sizeof(*cmd);
+    if (actual_size > size){
+        FATAL("Invalid Command size");
     }
 
     switch (cmd->opcode)
@@ -440,10 +454,11 @@ static void handle_cmd(int this, struct bt_hci_cmd_hdr* cmd, int size)
     case BT_HCI_CMD_LE_SET_ADV_ENABLE: handle_le_set_adv_enable(this, cmd); break;
     case BT_HCI_CMD_LE_CREATE_CONN: handle_le_create_conn(this, cmd); break;
     case BT_HCI_CMD_LE_READ_REMOTE_FEATURES: handle_le_read_remote_features(this, cmd); break;
-    case BT_HCI_CMD_LE_SET_PHY: handle_cmd_default(this, cmd); break;
+    case BT_HCI_CMD_LE_SET_PHY: handle_le_set_phy(this, cmd); break;
     case BT_HCI_CMD_HOST_NUM_COMPLETED_PACKETS: handle_cmd_none(this, cmd); break;
     default: FATAL("Unhandled command: 0x%x", cmd->opcode);
     }
+    return actual_size + 1;
 }
 
 static u16 convert_acl_handle(u16 handle)
@@ -459,22 +474,36 @@ static u16 convert_acl_handle(u16 handle)
     return acl_handle_pack(handle, (pb) | (bc << 2));
 }
 
-static void handle_acl(int this, struct bt_hci_acl_hdr* acl, int size)
+static u32 handle_acl(int this, struct bt_hci_acl_hdr* acl, u32 size)
 {
+    u32 actual_size = acl->dlen + sizeof(*acl);
+    if (actual_size > size)
+        FATAL("Invalid ACL packet size");
+
     send_num_completed_packets(this, acl_handle(acl->handle), 1);
     acl->handle = convert_acl_handle(acl->handle);
-    write(hosts[1 - this].socket_fd, &((char*)acl)[-1], size + 1);
-    pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, size);
+    write(hosts[1 - this].socket_fd, &((char*)acl)[-1], actual_size + 1);
+    pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, actual_size);
+    return actual_size + 1;
 }
 
-static void handle_data(int this, char* data, int size)
+static void handle_data(int this, u8* data, u32 size)
 {
-    pklg_write_packet(hosts[this].log_fd, data[0], false, &data[1], size - 1);
-    switch (data[0])
+    u8* pos = data;
+    u8* end = data + size;
+    u32 len = 0;
+
+    while (pos < end)
     {
-    case BT_H4_CMD_PKT: handle_cmd(this, (struct bt_hci_cmd_hdr*)&data[1], size - 1); break;
-    case BT_H4_ACL_PKT: handle_acl(this, (struct bt_hci_acl_hdr*)&data[1], size - 1); break;
-    default: FATAL("Unhandled packet type: %d", data[0]);
+        pklg_write_packet(hosts[this].log_fd, pos[0], false, &pos[1], size - 1);
+        switch (pos[0])
+        {
+        case BT_H4_CMD_PKT: len = handle_cmd(this, (struct bt_hci_cmd_hdr*)&pos[1], size - 1); break;
+        case BT_H4_ACL_PKT: len = handle_acl(this, (struct bt_hci_acl_hdr*)&pos[1], size - 1); break;
+        default: FATAL("Unhandled packet type: %d", pos[0]);
+        }
+        pos += len;
+        size -= len;
     }
 }
 
@@ -570,7 +599,13 @@ static int init_host_record(host_t* host, int sk, const char* name, const char* 
     {
         setsid();
         char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
-        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        setenv("LD_PRELOAD", "/lib32/libasan.so.6:/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        if (host == &host[1])
+        {
+            int dev_null_fd = open("/dev/null", O_RDWR); 
+            dup2(dev_null_fd, 1);
+            dup2(dev_null_fd, 2);
+        }
         execv(path, argv);
     }
     else 
@@ -591,7 +626,7 @@ static int bz_vctrl_start_replay(int sk, const char* name, const char* path)
     {
         setsid();
         char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
-        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        setenv("LD_PRELOAD", "/lib32/libasan.so.6:/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
         execv(path, argv);
     }
     else 
@@ -609,20 +644,30 @@ static int bz_vctrl_start_replay(int sk, const char* name, const char* path)
     struct PacketLogHeader header;
     while(pklg_read_header(log_fd, &header))
     {
+        OKF("%u %u", header.type, header.length);
         if (header.type == PKLG_COMMAND || header.type == PKLG_ACL_HS_TO_CTRL) 
         {
-            poll(&pfd, 1, 0);
+            OKF("start polling");
+            poll(&pfd, 1, -1);
+            OKF("finished polling: %d", header.length);
             read(log_fd, pklg_buffer, header.length - 9);
+            OKF("finished reading log: %d", header.length);
             read(socket_fd, hci_buffer, header.length - 8);
+            OKF("finished reading socket: %d", header.length);
+
             if (memcmp(&hci_buffer[1], pklg_buffer, header.length - 9))
-                FATAL("Packet log unmatch %0x %0x", hci_buffer[1], pklg_buffer[0]);
+                FATAL("Packet log unmatch %0x %0x", hci_buffer[3], pklg_buffer[2]);
+            OKF("finished comparing");
         }
         else if (header.type == PKLG_EVENT || header.type == PKLG_ACL_CTRL_TO_HS) 
         {
             *hci_buffer = (header.type == PKLG_EVENT ? BT_H4_EVT_PKT : BT_H4_ACL_PKT);
             read(log_fd, &hci_buffer[1], header.length - 9);
-            write(socket_fd, hci_buffer, header.length - 8);
+            u32 k = write(socket_fd, hci_buffer, header.length - 8);
+            sleep(1);
+            OKF("send %0x %0x %0x len %u:%u", hci_buffer[0],hci_buffer[1], hci_buffer[2], header.length - 8, k);
         }
+        OKF("read pklg item");
     }
 }
 
@@ -658,9 +703,9 @@ int main(int argc, char** argv)
     listen(sk, 3);
 
     init_signal_handlers();
-    // init_host_record(&hosts[0], sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
-    // init_host_record(&hosts[1], sk, "peripheral_ots.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
-    // bz_vctrl_start_record();
+    init_host_record(&hosts[0], sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
+    init_host_record(&hosts[1], sk, "peripheral_ots.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/peripheral_ots/build/zephyr/zephyr.exe");
+    bz_vctrl_start_record();
 
-    bz_vctrl_start_replay(sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
+    // bz_vctrl_start_replay(sk, "central_otc.pklg", "/home/xaz/Documents/BlueBench/targets/zephyr/tests/central_otc/build/zephyr/zephyr.exe");
 }
