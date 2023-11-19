@@ -1177,6 +1177,13 @@ region_t* extract_requests_ipp(unsigned char* buf, unsigned int buf_size, unsign
   *region_count_ref = region_count;
   return regions;
 }
+
+region_t* extract_requests_bluetooth(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
+{
+
+}
+
+
 unsigned int* extract_response_codes_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
 {
   char *mem;
@@ -1429,7 +1436,6 @@ unsigned int* extract_response_codes_NTP(unsigned char* buf, unsigned int buf_si
   return state_sequence;
 }
 
-
 unsigned int* extract_response_codes_SNMP(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
 {
   char *mem;
@@ -1500,6 +1506,7 @@ unsigned int* extract_response_codes_SNMP(unsigned char* buf, unsigned int buf_s
   *state_count_ref = state_count;
   return state_sequence;
 }
+
 unsigned int* extract_response_codes_smtp(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
 {
   char *mem;
@@ -1740,6 +1747,11 @@ unsigned int* extract_response_codes_dns(unsigned char* buf, unsigned int buf_si
   if (mem) ck_free(mem);
   *state_count_ref = state_count;
   return state_sequence;
+}
+
+unsigned int* extract_response_codes_bluetooth(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
+{
+  
 }
 
 static unsigned char dtls12_version[2] = {0xFE, 0xFD};
