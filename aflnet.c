@@ -7,11 +7,51 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pcap.h>
 
 #include "alloc-inl.h"
 #include "aflnet.h"
+#include "bluetooth.h"
 
 // Protocol-specific functions for extracting requests and responses
+
+region_t* extract_requests_bluetooth(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
+{
+  unsigned int region_count = 0;
+  region_t *regions = NULL;
+
+  u32 length = 0;
+  u8* end = buf + buf_size;
+  message_header_t* header = (message_header_t*)buf;
+
+  while ((u8*)header < end) {
+    length = SWAP32(header->length - 9);  // Length excluding type field
+    if (header->type == PKLG_EVENT || header->type == PKLG_ACL_CTRL_TO_HS) {
+      region_count++;
+      regions = (region_t *)ck_realloc(regions, region_count * sizeof(region_t));
+      regions[region_count - 1].start_byte = &header->type - buf;
+      regions[region_count - 1].end_byte = &header->payload[length] - buf;
+      regions[region_count - 1].state_sequence = NULL;
+      regions[region_count - 1].state_count = 0;
+    }
+    header = (message_header_t*)&header->payload[length];
+  }
+
+  //in case region_count equals zero, it means that the structure of the buffer is broken
+  //hence we create one region for the whole buffer
+  if ((region_count == 0) && (buf_size > 0)) {
+    regions = (region_t *)ck_realloc(regions, sizeof(region_t));
+    regions[0].start_byte = 0;
+    regions[0].end_byte = buf_size - 1;
+    regions[0].state_sequence = NULL;
+    regions[0].state_count = 0;
+
+    region_count = 1;
+  }
+
+  *region_count_ref = region_count;
+  return regions;
+}
 
 region_t* extract_requests_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
@@ -80,8 +120,6 @@ region_t* extract_requests_tftp(unsigned char* buf, unsigned int buf_size, unsig
   return regions;
 }
 
-
-
 region_t* extract_requests_dhcp(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
   char *mem;
@@ -148,7 +186,6 @@ region_t* extract_requests_dhcp(unsigned char* buf, unsigned int buf_size, unsig
   *region_count_ref = region_count;
   return regions;
 }
-
 
 region_t* extract_requests_SNTP(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
@@ -385,7 +422,7 @@ region_t* extract_requests_SNMP(unsigned char* buf, unsigned int buf_size, unsig
     regions = (region_t *)ck_realloc(regions, sizeof(region_t));
     regions[0].start_byte = 0;
     regions[0].end_byte = buf_size - 1;
-    regions[0].= NULL;
+    regions[0].state_sequence = NULL;
     regions[0].state_count = 0;
 
     region_count = 1;
@@ -688,7 +725,6 @@ region_t* extract_requests_tls(unsigned char* buf, unsigned int buf_size, unsign
   *region_count_ref = region_count;
   return regions;
 }
-
 
 region_t* extract_requests_dicom(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
@@ -1183,6 +1219,67 @@ region_t* extract_requests_bluetooth(unsigned char* buf, unsigned int buf_size, 
 
 }
 
+unsigned int* extract_response_code_bluetooth(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref) {
+  char *mem;
+  unsigned int byte_count = 0;
+  unsigned int mem_count = 0;
+  unsigned int mem_size = 1024;
+  unsigned int *state_sequence = NULL;
+  unsigned int state_count = 0;
+
+  mem=(char *)ck_alloc(mem_size);
+
+  state_count++;
+  state_sequence = (unsigned int *)ck_realloc(state_sequence, state_count * sizeof(unsigned int));
+  state_sequence[state_count - 1] = 0;
+
+  while (byte_count < buf_size) {
+    memcpy(&mem[mem_count], buf + byte_count++, 1);
+
+    if ((mem_count > 0) && ((memcmp(&mem[mem_count - 1], terminator_one, 1) == 0) || (memcmp(&mem[mem_count - 1], terminator_two, 1) == 0)
+    ||(memcmp(&mem[mem_count - 1], terminator_three, 1) == 0))) {
+      //Extract the response code which is the first 4 bytes
+     
+      char temp[5];
+      memcpy(temp, mem, 5);
+      
+      unsigned int message_code = (unsigned int)temp;
+      if (message_code == 0)
+      {
+        break;
+
+      } 
+
+      state_count++;
+      state_sequence = (unsigned int *)ck_realloc(state_sequence, state_count * sizeof(unsigned int));
+      state_sequence[state_count - 1] = message_code;
+      mem_count = 0;
+    } else if (byte_count == buf_size){
+      char temp[5];
+      memcpy(temp, mem, 5);
+      temp[4] = 0x0;
+      unsigned int message_code = (unsigned int) atoi(temp);
+      if (message_code == 0) {
+        break;
+      }
+      state_count++;
+      state_sequence = (unsigned int *)ck_realloc(state_sequence, state_count * sizeof(unsigned int));
+      state_sequence[state_count - 1] = message_code;
+      //mem_count = 0;
+      break;
+    }else{
+      mem_count++;
+      if (mem_count == mem_size) {
+        //enlarge the mem buffer
+        mem_size = mem_size * 2;
+        mem=(char *)ck_realloc(mem, mem_size);
+      }
+    }
+  }
+  if (mem) ck_free(mem);
+  *state_count_ref = state_count;
+  return state_sequence;
+}
 
 unsigned int* extract_response_codes_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
 {
@@ -1749,10 +1846,7 @@ unsigned int* extract_response_codes_dns(unsigned char* buf, unsigned int buf_si
   return state_sequence;
 }
 
-unsigned int* extract_response_codes_bluetooth(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
-{
-  
-}
+
 
 static unsigned char dtls12_version[2] = {0xFE, 0xFD};
 
@@ -2220,6 +2314,8 @@ unsigned int* extract_response_codes_ipp(unsigned char* buf, unsigned int buf_si
 
 // kl_messages manipulating functions
 
+
+// Contruct kl messages from non-replayable files
 klist_t(lms) *construct_kl_messages(u8* fname, region_t *regions, u32 region_count)
 {
   FILE *fseed = NULL;
@@ -2286,26 +2382,32 @@ u32 save_kl_messages_to_file(klist_t(lms) *kl_messages, u8 *fname, u8 replay_ena
   s32 fd = open(fname, O_WRONLY | O_CREAT, 0600);
   if (fd < 0) PFATAL("Unable to create file '%s'", fname);
 
+  u8* message = NULL;
   u32 message_count = 0;
+  message_header_t* message_header = NULL;
   //Iterate through all messages in the linked list
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages) && message_count < max_count; it = kl_next(it)) {
+    message =  kl_val(it)->mdata;
     message_size = kl_val(it)->msize;
-    if (replay_enabled) {
-		  mem = (u8 *)ck_realloc(mem, 4 + len + message_size);
 
-      //Save packet size first
-      u32 *psize = (u32*)&mem[len];
-      *psize = message_size;
+    if (replay_enabled) {
+		  mem = (u8 *)ck_realloc(mem, sizeof(*message_header) + len + message_size - 1);
+
+      //Save packet header first
+      message_header = (message_header_t*)&mem[len];
+      message_header->length = SWAP32(message_size);
+      message_header->tv_sec = message_header->tv_us = 0;
+      message_header->type = bt_convert_h4_to_pklg(*message);
 
       //Save packet content
-      memcpy(&mem[len + 4], kl_val(it)->mdata, message_size);
-      len = 4 + len + message_size;
+      memcpy(message_header->payload, message + 1, message_size - 1);
+      len += (sizeof(*message_header) + message_size - 1);
     } else {
       mem = (u8 *)ck_realloc(mem, len + message_size);
 
       //Save packet content
       memcpy(&mem[len], kl_val(it)->mdata, message_size);
-      len = len + message_size;
+      len += message_size;
     }
     message_count++;
   }
@@ -2571,4 +2673,42 @@ u32 read_bytes_to_uint32(unsigned char* buf, unsigned int offset, int num_bytes)
     val = (val << 8) + buf[i+offset];
   }
   return val;
+}
+
+u32 bt_make_state_id(u32 proto, u32 opcode) {
+  return (proto << 16) | opcode;
+}
+
+u32 bt_state_id_get_proto(u32 id) {
+  return id >> 16;
+}
+
+u32 bt_state_id_get_opcode(u32 id) {
+  return id & 0x0000FFFF;
+}
+
+u8 bt_convert_pklg_to_h4(u8 pklg_type) {
+  switch (pklg_type)
+  {
+  case PKLG_COMMAND: return BT_H4_CMD_PKT;
+  case PKLG_EVENT: return BT_H4_EVT_PKT;
+  case PKLG_ACL_CTRL_TO_HS:
+  case PKLG_ACL_HS_TO_CTRL:
+    return BT_H4_ACL_PKT;
+  default:
+    FATAL("Unsupported pklg type: %u", pklg_type);
+  }
+}
+
+u8 bt_convert_h4_to_pklg(u8 h4_type, bool ctrl_to_hs) {
+  switch (h4_type)
+  {
+  case BT_H4_CMD_PKT: return PKLG_EVENT;
+  case BT_H4_CMD_PKT: return PKLG_COMMAND;
+  case BT_H4_ACL_PKT:
+    if (ctrl_to_hs) return PKLG_ACL_CTRL_TO_HS;
+    else return PKLG_ACL_HS_TO_CTRL;
+  default:
+    FATAL("Unsupported h4 type: %u", h4_type);
+  }
 }

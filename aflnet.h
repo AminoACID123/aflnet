@@ -4,7 +4,19 @@
 #include "klist.h"
 #include "khash.h"
 #include <arpa/inet.h>
+#include <stdbool.h>
 #include <poll.h>
+
+enum 
+{
+    PKLG_CMD = 0,
+    PKLG_EVT = 1,
+    PKLG_ACL_HS_TO_CTRL = 2,
+    PKLG_ACL_CTRL_TO_HS = 3,
+    PKLG_SCO_HS_TO_CTRL = 8,
+    PKLG_SCO_CTRL_TO_HS = 9,
+    PKLG_DEFAULT = 0xfc
+};
 
 typedef struct {
   int start_byte;                 /* The start byte, negative if unknown. */
@@ -15,7 +27,15 @@ typedef struct {
 } region_t;
 
 typedef struct {
-  char *mdata; /* Buffer keeping the message data */
+    u32 length;                   /* Message length (big endian)*/
+    u32 tv_sec;                   /* Time */
+    u32 tv_us;                    /* Time */
+    u8 type;                      /* Message type */
+    u8 payload[];                 /* Message payload */
+} message_header_t __packed;
+
+typedef struct {
+  u8 *mdata; /* Buffer keeping the message data */
   int msize;   /* Message size */
 } message_t;
 
@@ -44,6 +64,69 @@ enum {
   /* 02 */ ROUND_ROBIN,
   /* 03 */ FAVOR
 };
+
+static inline int pklg_write_init(const char* fname)
+{
+    return fileno(fopen(fname, "wb"));
+}
+
+static inline int pklg_read_init(const char* fname)
+{
+    return fileno(fopen(fname, "rb"));
+}
+
+static inline void pklg_write_header(message_header_t* header, u8 type, bool ctrl_to_hs, u16 len)
+{
+    // struct timeval curr_time;
+    // gettimeofday(&curr_time, NULL);
+
+    header->length = to_big_endian(len + 9);
+    // header->tv_sec = to_big_endian(curr_time.tv_sec);
+    // header->tv_us = to_big_endian(curr_time.tv_usec);
+    header->tv_sec = header->tv_us = 0;
+
+    static u8 h4_to_pklg_map[][2] = {
+        {},
+        {PKLG_CMD, PKLG_CMD},
+        {PKLG_ACL_HS_TO_CTRL, PKLG_ACL_CTRL_TO_HS},
+        {PKLG_SCO_HS_TO_CTRL, PKLG_SCO_CTRL_TO_HS},
+        {PKLG_EVT, PKLG_EVT},
+    };
+    header->type = h4_to_pklg_map[type][ctrl_to_hs];
+}
+
+static inline bool pklg_read_header(int fd, message_header_t* header)
+{
+    int n = read(fd, header, sizeof(struct PacketLogHeader));
+    header->length = to_big_endian(header->length);
+    return n == sizeof(struct PacketLogHeader);
+}
+
+static inline void pklg_write_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
+{
+    struct PacketLogHeader header;
+    pklg_write_header(&header, type, in, len);
+    struct iovec iov[] = {
+        {.iov_base = &header, .iov_len = sizeof(header)},
+        {.iov_base = packet, .iov_len = len}
+    };
+    writev(fd, iov, 2);
+}
+
+static inline void pklg_write_packet_v(int fd, u8 type, bool in, struct iovec* iov, u32 n, u32 len)
+{
+    struct PacketLogHeader header;
+    pklg_write_header(&header, type, in, len);
+    write(fd, &header, sizeof(header));
+    writev(fd, iov, n);
+}
+
+static inline void pklg_read_packet(int fd, struct PacketLogHeader* header, u8* buffer)
+{
+    *buffer = header->type;
+    read(fd, &buffer[1], header->length - 9);
+}
+
 
 // Initialize klist linked list data structure
 #define message_t_freer(x)
@@ -119,6 +202,12 @@ u32 save_kl_messages_to_file(klist_t(lms) *kl_messages, u8 *fname, u8 replay_ena
 
 /* Convert back a linked list of messages to regions to maintain the message sequence structure as much as possible */
 region_t* convert_kl_messages_to_regions(klist_t(lms) *kl_messages, u32* region_count_ref, u32 max_count);
+
+u32 bt_make_state_id(u32 proto, u32 opcode);
+
+u8 bt_convert_pklg_to_h4(u8 pklg_type);
+
+u8 bt_convert_h4_to_pklg(u8 h4_type);
 
 // Utility functions
 

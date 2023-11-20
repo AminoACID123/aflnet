@@ -91,4 +91,7 @@ typedef int64_t  s64;
 #define likely(_x)   __builtin_expect(!!(_x), 1)
 #define unlikely(_x)  __builtin_expect(!!(_x), 0)
 
+#define __packed __attribute__((packed))
+#define __init(prio)  __attribute__(constructor(prio))
+
 #endif /* ! _HAVE_TYPES_H */

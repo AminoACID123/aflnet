@@ -67,6 +67,8 @@
 #include <sys/ioctl.h>
 #include <sys/file.h>
 #include <sys/capability.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "aflnet.h"
 #include <graphviz/gvc.h>
@@ -114,7 +116,8 @@ EXP_ST u64 mem_limit  = MEM_LIMIT;    /* Memory cap for child (MB)        */
 
 static u32 stats_update_freq = 1;     /* Stats update frequency (execs)   */
 
-EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
+EXP_ST u8  recording_mode,            /* Whether to run recoring mode     */
+           skip_deterministic,        /* Skip deterministic stages?       */
            force_deterministic,       /* Force deterministic stages?      */
            use_splicing,              /* Recombine input files?           */
            dumb_mode,                 /* Run in non-instrumented mode?    */
@@ -144,7 +147,8 @@ static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
            dev_null_fd = -1,          /* Persistent fd for /dev/null      */
            fsrv_ctl_fd,               /* Fork server control pipe (write) */
-           fsrv_st_fd;                /* Fork server status pipe (read)   */
+           fsrv_st_fd,                /* Fork server status pipe (read)   */
+           hci_fd;             /* FD of HCI Socket                 */
 
 static s32 forksrv_pid,               /* PID of the fork server           */
            child_pid = -1,            /* PID of the fuzzed program        */
@@ -359,12 +363,11 @@ u32 socket_timeout_usecs = 1000;
 u8 net_protocol;
 u8* net_ip;
 u32 net_port;
-char *response_buf = NULL;
+u8 *response_buf = NULL;
 int response_buf_size = 0; //the size of the whole response buffer
 u32 *response_bytes = NULL; //an array keeping accumulated response buffer size
                             //e.g., response_bytes[i] keeps the response buffer size
                             //once messages 0->i have been received and processed by the SUT
-s32 hci_fd;                 // Unix socket for transporting HCI packets
 u32 max_annotated_regions = 0;
 u32 target_state_id = 0;
 u32 *state_ids = NULL;
@@ -2796,6 +2799,17 @@ static void move_process_to_netns() {
     PFATAL("setns failed");
 }
 
+static int create_hci_socket()
+{
+    int sk = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr;
+    addr.sun_family = PF_UNIX;
+    strcpy(addr.sun_path, BZ_HCI_SOCKET_PATH);
+    bind(sk, (struct sockaddr*)&addr, sizeof(addr));
+    listen(sk, 2);
+    return sk;
+}
+
 /* Spin up fork server (instrumented mode only). The idea is explained here:
 
    http://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html
@@ -2809,7 +2823,10 @@ EXP_ST void init_forkserver(char** argv) {
   static struct itimerval it;
   int st_pipe[2], ctl_pipe[2];
   int status;
-  s32 rlen;
+  s32 rlen, sk;
+
+  ACTF("Creating HCI socket...");
+  sk = create_hci_socket();
 
   ACTF("Spinning up the fork server...");
 
@@ -2946,6 +2963,7 @@ EXP_ST void init_forkserver(char** argv) {
 
   setitimer(ITIMER_REAL, &it, NULL);
 
+  hci_fd = accept(sk, 0, 0);
   rlen = read(fsrv_st_fd, &status, 4);
 
   it.it_value.tv_sec = 0;

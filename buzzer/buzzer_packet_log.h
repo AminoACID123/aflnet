@@ -28,23 +28,14 @@ enum
     PKLG_MESSAGE = 0xfc
 };
 
-static inline u32 to_big_endian(u32 value)
-{
-    u32 result;
-    for (int i = 0; i < 4; ++i)
-    {
-        ((u8*)&result)[i] = ((u8*)&value)[3 - i];
-    }
-    return result;
-}
-
-struct __packed PacketLogHeader
+struct PacketLogHeader
 {
     u32 length;
     u32 tv_sec;
     u32 tv_us;
     u8 type;
-};
+}__packed;
+
 
 static inline int pklg_write_init(const char* fname)
 {
@@ -58,12 +49,13 @@ static inline int pklg_read_init(const char* fname)
 
 static inline void pklg_write_header(struct PacketLogHeader* header, u8 type, bool ctrl_to_hs, u16 len)
 {
-    struct timeval curr_time;
-    gettimeofday(&curr_time, NULL);
+    // struct timeval curr_time;
+    // gettimeofday(&curr_time, NULL);
 
     header->length = to_big_endian(len + 9);
-    header->tv_sec = to_big_endian(curr_time.tv_sec);
-    header->tv_us = to_big_endian(curr_time.tv_usec);
+    // header->tv_sec = to_big_endian(curr_time.tv_sec);
+    // header->tv_us = to_big_endian(curr_time.tv_usec);
+    header->tv_sec = header->tv_us = 0;
 
     static u8 h4_to_pklg_map[][2] = {
         {},

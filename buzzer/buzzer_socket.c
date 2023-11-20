@@ -30,7 +30,7 @@ void __init connect_hci_socket()
     // Zero out the address, and set family and path.
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, BZ_HCI_SOCKET);
+    strcpy(addr.sun_path, BZ_HCI_SOCKET_PATH);
 
     if (connect(hci_socket_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1)
     {
