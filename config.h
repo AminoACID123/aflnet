@@ -62,9 +62,9 @@
 /* Default memory limit for child process (MB): */
 
 #ifndef WORD_SIZE_64
-#  define MEM_LIMIT         25
+#  define MEM_LIMIT         200
 #else
-#  define MEM_LIMIT         50
+#  define MEM_LIMIT         200
 #endif /* ^!WORD_SIZE_64 */
 
 /* Default memory limit when running in QEMU mode (MB): */

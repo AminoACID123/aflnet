@@ -60,7 +60,7 @@ region_t* extract_requests_bluetooth(u8* buf, u32 buf_size, u32* region_count_re
     region_count++;
     regions = (region_t *)ck_realloc(regions, region_count * sizeof(region_t));
     regions[region_count - 1].start_byte = pos - buf;
-    regions[region_count - 1].end_byte = pos + len - buf;
+    regions[region_count - 1].end_byte = pos + len - buf - 1;
     regions[region_count - 1].state_sequence = NULL;
     regions[region_count - 1].state_count = 0;
     
@@ -2493,6 +2493,9 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   pfd[0].events = POLLOUT;
   int rv = poll(pfd, 1, 1);
 
+    hexdump("send: ", mem, 0, len);
+    exit(0);
+
   setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
   if (rv > 0) {
     if (pfd[0].revents & POLLOUT) {
@@ -2694,7 +2697,7 @@ u8* state_sequence_to_string(unsigned int *stateSequence, unsigned int stateCoun
 
 void hexdump(unsigned char *msg, unsigned char * buf, int start, int end) {
   printf("%s : ", msg);
-  for (int i=start; i<=end; i++) {
+  for (int i=start; i<end; i++) {
     printf("%02x", buf[i]);
   }
   printf("\n");

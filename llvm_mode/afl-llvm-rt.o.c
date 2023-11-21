@@ -37,6 +37,9 @@
 #include <string.h>
 #include <assert.h>
 
+#include <sys/time.h>
+#include <sys/resource.h>
+
 #include <sys/mman.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
@@ -112,6 +115,8 @@ static void __afl_start_forkserver(void) {
 
   if (write(FORKSRV_FD + 1, tmp, 4) != 4) return;
 
+  printf("Start Forkserver\n\n");
+
   while (1) {
 
     u32 was_killed;
@@ -143,6 +148,9 @@ static void __afl_start_forkserver(void) {
 
         close(FORKSRV_FD);
         close(FORKSRV_FD + 1);
+        struct rlimit r;
+        getrlimit(RLIMIT_NPROC, &r);
+        printf("Forkserver start child: %d:%d", r.rlim_cur, r.rlim_max);
         return;
   
       }

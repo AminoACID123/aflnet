@@ -47,7 +47,7 @@ void __init connect_hci_socket()
     // char temp[32] = {'\0'};
     // sprintf(temp, "%d", hci_socket_fd);
     // setenv(BTFUZZ_ENV_HCI_SOCKET_FD, temp, 1);
-    printf("Buzzer: connect hci socket: %d", hci_socket_fd);
+    printf("Buzzer: connect hci socket: %d\n", hci_socket_fd);
 }
 
 
@@ -58,7 +58,7 @@ int socket(int domain ,int type, int protocol)
 
     if (domain == PF_BLUETOOTH)
     {
-        printf("Using socket %d", hci_socket_fd);
+        printf("Using socket %d\n", hci_socket_fd);
         return hci_socket_fd;
     }
     else

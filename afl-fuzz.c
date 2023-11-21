@@ -1010,7 +1010,11 @@ int send_over_network()
   timeout.tv_usec = socket_timeout_usecs;
 
   //retrieve early server response if needed
-  if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) goto HANDLE_RESPONSES;
+  if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) 
+  {
+
+    goto HANDLE_RESPONSES;
+  }
 
   //write the request messages
   kliter_t(lms) *it; 
@@ -2835,7 +2839,7 @@ EXP_ST void init_forkserver(char** argv) {
 
       r.rlim_cur = FORKSRV_FD + 2;
       setrlimit(RLIMIT_NOFILE, &r); /* Ignore errors */
-
+EAGAIN;
     }
 
     if (mem_limit) {
@@ -2876,8 +2880,8 @@ EXP_ST void init_forkserver(char** argv) {
 
     setsid();
 
-    dup2(dev_null_fd, 1);
-    dup2(dev_null_fd, 2);
+    // dup2(dev_null_fd, 1);
+    // dup2(dev_null_fd, 2);
 
     if (out_file) {
 
