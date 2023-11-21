@@ -145,8 +145,7 @@ static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
            dev_null_fd = -1,          /* Persistent fd for /dev/null      */
            fsrv_ctl_fd,               /* Fork server control pipe (write) */
-           fsrv_st_fd,                /* Fork server status pipe (read)   */
-           hci_fd;
+           fsrv_st_fd;                /* Fork server status pipe (read)   */
 
 static s32 forksrv_pid,               /* PID of the fork server           */
            child_pid = -1,            /* PID of the fuzzed program        */
@@ -1014,7 +1013,7 @@ int send_over_network()
   if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) goto HANDLE_RESPONSES;
 
   //write the request messages
-  kliter_t(lms) *it;
+  kliter_t(lms) *it; 
   messages_sent = 0;
 
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
@@ -2926,6 +2925,8 @@ EXP_ST void init_forkserver(char** argv) {
                            "abort_on_error=1:"
                            "allocator_may_return_null=1:"
                            "msan_track_origins=0", 0);
+
+    setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
 
     execv(target_path, argv);
 
@@ -9103,6 +9104,7 @@ int main(int argc, char** argv) {
   if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 
   //AFLNet - Check for required arguments
+  use_net = protocol_selected = 1;
   if (!use_net) FATAL("Please specify network information of the server under test (e.g., tcp://127.0.0.1/8554)");
 
   if (!protocol_selected) FATAL("Please specify the protocol to be tested using the -P option");
@@ -9116,6 +9118,9 @@ int main(int argc, char** argv) {
 
   setup_signal_handlers();
   check_asan_opts();
+
+  extract_requests = &extract_requests_bluetooth;
+  extract_response_codes = &extract_response_codes_bluetooth;
 
   if (sync_id) fix_up_sync();
 
@@ -9195,6 +9200,7 @@ int main(int argc, char** argv) {
   else
     use_argv = argv + optind;
 
+  
   perform_dry_run(use_argv);
 
   cull_queue();

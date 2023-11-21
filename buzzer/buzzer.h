@@ -20,10 +20,14 @@ static inline u32 bz_get_state_id(u32 proto, u32 opcode) {
 }
 
 static inline s32 create_hci_socket() {
+  
+  remove(BZ_HCI_SOCKET);
+
   int sk = socket(AF_UNIX, SOCK_STREAM, 0);
   struct sockaddr_un addr;
   addr.sun_family = PF_UNIX;
   strcpy(addr.sun_path, BZ_HCI_SOCKET);
   bind(sk, (struct sockaddr*)&addr, sizeof(addr));
   listen(sk, 3);
+  return sk;
 }

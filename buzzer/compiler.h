@@ -6,7 +6,7 @@
 #endif
 
 #ifndef __init
-#define __init __attribute__((constructor))
+#define __init __attribute__((constructor(0)))
 #endif
 
 

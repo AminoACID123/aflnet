@@ -105,7 +105,8 @@ static void send_command_complete(int this, u16 opcode, void* payload, int size)
                                           { .iov_base = payload, .iov_len = size } };
    
     int n = writev(hosts[this].socket_fd, iov, 4);
-    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
+    // pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
+    writev(hosts[this].log_fd, iov, 4);
 }
 
 static void send_command_status(int this, u8 status, u16 opcode)
@@ -118,7 +119,8 @@ static void send_command_status(int this, u8 status, u16 opcode)
                                   { .iov_base = &cs, .iov_len = sizeof(cs) } };
 
     int n = writev(hosts[this].socket_fd, iov, 3);
-    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
+    // pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
+    writev(hosts[this].log_fd, iov, 3);
 }
 
 static void send_command_status_success(int this, u16 opcode)
@@ -136,7 +138,8 @@ static void send_le_meta(int this, u8 opcode, void* payload, int size)
                                   { .iov_base = payload,    .iov_len = size} };
     
     int n = writev(hosts[this].socket_fd, iov, 4);
-    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
+    // pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 3, n - 1);
+    writev(hosts[this].log_fd, iov, 4);
 }
 
 static void send_event(int this, u16 opcode, void* payload, int size)
@@ -148,7 +151,8 @@ static void send_event(int this, u16 opcode, void* payload, int size)
                                   { .iov_base = payload,    .iov_len = size} };
     
     int n = writev(hosts[this].socket_fd, iov, 3);
-    pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
+    // pklg_write_packet_v(hosts[this].log_fd, type, true, &iov[1], 2, n - 1);
+    writev(hosts[this].log_fd, iov, 3);
 }
 
 static void send_num_completed_packets(int this, u16 handle, u32 n)
@@ -483,7 +487,7 @@ static u32 handle_acl(int this, struct bt_hci_acl_hdr* acl, u32 size)
     send_num_completed_packets(this, acl_handle(acl->handle), 1);
     acl->handle = convert_acl_handle(acl->handle);
     write(hosts[1 - this].socket_fd, &((char*)acl)[-1], actual_size + 1);
-    pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, actual_size);
+    // pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, actual_size);
     return actual_size + 1;
 }
 
@@ -495,7 +499,7 @@ static void handle_data(int this, u8* data, u32 size)
 
     while (pos < end)
     {
-        pklg_write_packet(hosts[this].log_fd, pos[0], false, &pos[1], size - 1);
+        // pklg_write_packet(hosts[this].log_fd, pos[0], false, &pos[1], size - 1);
         switch (pos[0])
         {
         case BT_H4_CMD_PKT: len = handle_cmd(this, (struct bt_hci_cmd_hdr*)&pos[1], size - 1); break;
@@ -599,7 +603,7 @@ static int init_host_record(host_t* host, int sk, const char* name, const char* 
     {
         setsid();
         char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
-        setenv("LD_PRELOAD", "/lib32/libasan.so.6:/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
         if (host == &host[1])
         {
             int dev_null_fd = open("/dev/null", O_RDWR); 
@@ -626,7 +630,7 @@ static int bz_vctrl_start_replay(int sk, const char* name, const char* path)
     {
         setsid();
         char* argv[] = { (char*)path, "--bt-dev=hci0", NULL};
-        setenv("LD_PRELOAD", "/lib32/libasan.so.6:/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
+        setenv("LD_PRELOAD", "/home/xaz/Documents/aflnet/buzzer/build/libbuzzer_socket.so", 1);
         execv(path, argv);
     }
     else 

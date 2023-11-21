@@ -84,10 +84,10 @@ static inline bool pklg_read_header(int fd, struct PacketLogHeader* header)
 
 static inline void pklg_write_packet(int fd, u8 type, u8 in, u8* packet, u32 len)
 {
-    struct PacketLogHeader header;
-    pklg_write_header(&header, type, in, len);
+    // struct PacketLogHeader header;
+    // pklg_write_header(&header, type, in, len);
     struct iovec iov[] = {
-        {.iov_base = &header, .iov_len = sizeof(header)},
+        {.iov_base = &type, .iov_len = 1},
         {.iov_base = packet, .iov_len = len}
     };
     writev(fd, iov, 2);

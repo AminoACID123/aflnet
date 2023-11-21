@@ -50,7 +50,8 @@ region_t* extract_requests_bluetooth(u8* buf, u32 buf_size, u32* region_count_re
       len = hdr->dlen + sizeof(struct bt_hci_sco_hdr) + 1;
     }
     else {
-      ...
+      pos++;
+      continue;
     }
 
     if (pos + len >= end)
@@ -454,7 +455,7 @@ region_t* extract_requests_SNMP(unsigned char* buf, unsigned int buf_size, unsig
     regions = (region_t *)ck_realloc(regions, sizeof(region_t));
     regions[0].start_byte = 0;
     regions[0].end_byte = buf_size - 1;
-    regions[0].= NULL;
+    regions[0].state_sequence = NULL;
     regions[0].state_count = 0;
 
     region_count = 1;
@@ -1260,7 +1261,7 @@ u32* extract_response_codes_bluetooth(u8* buf, u32 buf_size, u32* state_count_re
   u8* end = buf + buf_size;
 
   while (pos < end) {
-    
+
     switch (*pos)
     {
     case BT_H4_ACL_PKT: {
@@ -1320,6 +1321,8 @@ u32* extract_response_codes_bluetooth(u8* buf, u32 buf_size, u32* state_count_re
     pos += len;
   }
 
+  *state_count_ref = state_count;
+  return state_sequence;
 }
 
 unsigned int* extract_response_codes_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
