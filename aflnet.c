@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,8 +11,77 @@
 
 #include "alloc-inl.h"
 #include "aflnet.h"
+#include "buzzer/bluetooth.h"
+#include "buzzer/buzzer.h"
 
 // Protocol-specific functions for extracting requests and responses
+
+region_t* extract_requests_bluetooth(u8* buf, u32 buf_size, u32* region_count_ref) 
+{
+  u8 *mem;
+  u32 mem_count = 0;
+  u32 mem_size = 1024;
+  u32 region_count = 0;
+  region_t *regions = NULL;
+
+  u8* pos = buf;
+  u8* end = buf + buf_size;
+  u32 len = 0;
+
+  while (pos < end) {
+    if (*pos == BT_H4_ACL_PKT) {
+      struct bt_hci_acl_hdr* hdr = (struct bt_hci_acl_hdr*)(pos + 1);
+      len = hdr->dlen + sizeof(struct bt_hci_acl_hdr) + 1;
+    }
+    else if (*pos == BT_H4_CMD_PKT) {
+      struct bt_hci_cmd_hdr* hdr = (struct bt_hci_cmd_hdr*)(pos + 1);
+      len = hdr->plen + sizeof(struct bt_hci_cmd_hdr) + 1;
+    } 
+    else if (*pos == BT_H4_EVT_PKT) {
+      struct bt_hci_evt_hdr* hdr = (struct bt_hci_evt_hdr*)(pos + 1);
+      len = hdr->plen + sizeof(struct bt_hci_evt_hdr) + 1;
+    }
+    else if (*pos == BT_H4_ISO_PKT) {
+      struct bt_hci_iso_hdr* hdr = (struct bt_hci_iso_hdr*)(pos + 1);
+      len = hdr->dlen + sizeof(struct bt_hci_iso_hdr) + 1;
+    }
+    else if (*pos == BT_H4_SCO_PKT) {
+      struct bt_hci_sco_hdr* hdr = (struct bt_hci_sco_hdr*)(pos + 1);
+      len = hdr->dlen + sizeof(struct bt_hci_sco_hdr) + 1;
+    }
+    else {
+      ...
+    }
+
+    if (pos + len >= end)
+      break;
+
+    region_count++;
+    regions = (region_t *)ck_realloc(regions, region_count * sizeof(region_t));
+    regions[region_count - 1].start_byte = pos - buf;
+    regions[region_count - 1].end_byte = pos + len - buf;
+    regions[region_count - 1].state_sequence = NULL;
+    regions[region_count - 1].state_count = 0;
+    
+    pos += len;
+  }
+
+  //in case region_count equals zero, it means that the structure of the buffer is broken
+  //hence we create one region for the whole buffer
+  if ((region_count == 0) && (buf_size > 0)) {
+    regions = (region_t *)ck_realloc(regions, sizeof(region_t));
+    regions[0].start_byte = 0;
+    regions[0].end_byte = buf_size - 1;
+    regions[0].state_sequence = NULL;
+    regions[0].state_count = 0;
+
+    region_count = 1;
+  }
+
+  *region_count_ref = region_count;
+  return regions;
+}
+
 
 region_t* extract_requests_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
@@ -79,7 +149,6 @@ region_t* extract_requests_tftp(unsigned char* buf, unsigned int buf_size, unsig
   *region_count_ref = region_count;
   return regions;
 }
-
 
 
 region_t* extract_requests_dhcp(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
@@ -1177,6 +1246,81 @@ region_t* extract_requests_ipp(unsigned char* buf, unsigned int buf_size, unsign
   *region_count_ref = region_count;
   return regions;
 }
+
+u32* extract_response_codes_bluetooth(u8* buf, u32 buf_size, u32* state_count_ref)
+{
+  u32* state_sequence = NULL;
+  u32 state_count = 0, state_id = 0, len = 0;
+
+  state_count++;
+  state_sequence = (unsigned int *)ck_realloc(state_sequence, state_count * sizeof(unsigned int));
+  state_sequence[state_count - 1] = 0; 
+
+  u8* pos = buf;
+  u8* end = buf + buf_size;
+
+  while (pos < end) {
+    switch (*pos)
+    {
+    case BT_H4_ACL_PKT: {
+
+      struct bt_hci_acl_hdr* hdr = (struct bt_hci_acl_hdr*)(pos + 1);
+      struct bt_l2cap_hdr* l2cap = (struct bt_l2cap_hdr*)hdr->data;
+      
+      switch (l2cap->cid)
+      {
+      case BT_L2CAP_CID_ATT: state_id = bz_get_state_id(BZ_PROTO_ATT, *l2cap->data); break;
+      case BT_L2CAP_CID_SIG: state_id = bz_get_state_id(BZ_PROTO_L2CAP, *l2cap->data); break;
+      case BT_L2CAP_CID_SIG_LE: state_id = bz_get_state_id(BZ_PROTO_L2CAP_LE, *l2cap->data); break;
+      case BT_L2CAP_CID_SMP: state_id = bz_get_state_id(BZ_PROTO_SMP, *l2cap->data); break;
+      case BT_L2CAP_CID_SMP_BREDR: state_id = bz_get_state_id(BZ_PROTO_SMP_BREDR, *l2cap->data); break;
+      default: break;
+      }
+
+      len = hdr->dlen + sizeof(struct bt_hci_acl_hdr) + 1;
+      break;
+    }
+
+    case BT_H4_CMD_PKT: {
+      struct bt_hci_cmd_hdr* hdr = (struct bt_hci_cmd_hdr*)(pos + 1);
+      state_id = bz_get_state_id(BZ_PROTO_CMD, hdr->opcode);
+      len = hdr->plen + sizeof(struct bt_hci_cmd_hdr) + 1;
+      break;
+    } 
+
+    case BT_H4_EVT_PKT: {
+      struct bt_hci_evt_hdr* hdr = (struct bt_hci_evt_hdr*)(pos + 1);
+      state_id = bz_get_state_id(BZ_PROTO_EVT, hdr->evt);
+      len = hdr->plen + sizeof(struct bt_hci_evt_hdr) + 1;
+      break;
+    }
+    
+    case BT_H4_ISO_PKT: {
+      struct bt_hci_iso_hdr* hdr = (struct bt_hci_iso_hdr*)(pos + 1);
+      state_id = bz_get_state_id(BZ_PROTO_ISO, 0);
+      len = hdr->dlen + sizeof(struct bt_hci_iso_hdr) + 1;
+      break;
+    }
+
+    case BT_H4_SCO_PKT: {
+      struct bt_hci_sco_hdr* hdr = (struct bt_hci_sco_hdr*)(pos + 1);
+      state_id = bz_get_state_id(BZ_PROTO_SCO, 0);
+      len = hdr->dlen + sizeof(struct bt_hci_sco_hdr) + 1;
+      break;
+    }
+
+    default: break;
+    }
+    
+    state_count++;
+    state_sequence = (unsigned int *)ck_realloc(state_sequence, state_count * sizeof(unsigned int));
+    state_sequence[state_count - 1] = state_id;
+    
+    pos += len;
+  }
+
+}
+
 unsigned int* extract_response_codes_tftp(unsigned char* buf, unsigned int buf_size, unsigned int* state_count_ref)
 {
   char *mem;

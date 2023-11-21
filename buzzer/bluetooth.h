@@ -3299,6 +3299,12 @@ struct bt_hci_evt_le_big_info_adv_report {
 #define BT_HCI_ERR_ENC_MODE_NOT_ACCEPTABLE	0x25
 
 /* L2CAP Start */
+#define BT_L2CAP_CID_SIG		1
+#define BT_L2CAP_CID_ATT		4
+#define BT_L2CAP_CID_SIG_LE		5
+#define BT_L2CAP_CID_SMP		6
+#define BT_L2CAP_CID_SMP_BREDR	7
+
 struct bt_l2cap_hdr {
 	uint16_t len;
 	uint16_t cid;
