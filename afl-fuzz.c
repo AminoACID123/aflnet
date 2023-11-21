@@ -69,6 +69,7 @@
 #include <sys/capability.h>
 
 #include "aflnet.h"
+#include "buzzer/buzzer.h"
 #include <graphviz/gvc.h>
 #include <math.h>
 
@@ -144,7 +145,8 @@ static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
            dev_null_fd = -1,          /* Persistent fd for /dev/null      */
            fsrv_ctl_fd,               /* Fork server control pipe (write) */
-           fsrv_st_fd;                /* Fork server status pipe (read)   */
+           fsrv_st_fd,                /* Fork server status pipe (read)   */
+           hci_fd;
 
 static s32 forksrv_pid,               /* PID of the fork server           */
            child_pid = -1,            /* PID of the fuzzed program        */
@@ -2811,6 +2813,8 @@ EXP_ST void init_forkserver(char** argv) {
   int status;
   s32 rlen;
 
+  int sk = create_hci_socket();
+
   ACTF("Spinning up the fork server...");
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) PFATAL("pipe() failed");
@@ -2820,6 +2824,8 @@ EXP_ST void init_forkserver(char** argv) {
   if (forksrv_pid < 0) PFATAL("fork() failed");
 
   if (!forksrv_pid) {
+
+    close(sk);
 
     struct rlimit r;
 
@@ -2945,6 +2951,8 @@ EXP_ST void init_forkserver(char** argv) {
   it.it_value.tv_usec = ((exec_tmout * FORK_WAIT_MULT) % 1000) * 1000;
 
   setitimer(ITIMER_REAL, &it, NULL);
+
+  hci_fd = accept(sk, 0, 0);
 
   rlen = read(fsrv_st_fd, &status, 4);
 

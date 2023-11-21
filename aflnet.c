@@ -1260,6 +1260,7 @@ u32* extract_response_codes_bluetooth(u8* buf, u32 buf_size, u32* state_count_re
   u8* end = buf + buf_size;
 
   while (pos < end) {
+    
     switch (*pos)
     {
     case BT_H4_ACL_PKT: {
