@@ -487,6 +487,7 @@ static u32 handle_acl(int this, struct bt_hci_acl_hdr* acl, u32 size)
     send_num_completed_packets(this, acl_handle(acl->handle), 1);
     acl->handle = convert_acl_handle(acl->handle);
     write(hosts[1 - this].socket_fd, &((char*)acl)[-1], actual_size + 1);
+    write(hosts[1 - this].log_fd, &((char*)acl)[-1], actual_size + 1);
     // pklg_write_packet(hosts[1 - this].log_fd, ((char*)acl)[-1], true, (u8*)acl, actual_size);
     return actual_size + 1;
 }

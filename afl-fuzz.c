@@ -355,7 +355,7 @@ static inline u8 has_new_bits(u8* virgin_map);
 /* AFLNet-specific variables & functions */
 
 u32 server_wait_usecs = 10000;
-u32 poll_wait_msecs = 1;
+u32 poll_wait_msecs = 15;
 u32 socket_timeout_usecs = 1000;
 u8 net_protocol;
 u8* net_ip;
@@ -1012,7 +1012,7 @@ int send_over_network()
   //retrieve early server response if needed
   if (net_recv(hci_fd, timeout, poll_wait_msecs, &response_buf, &response_buf_size)) 
   {
-
+    printf("(initial recv)\n");
     goto HANDLE_RESPONSES;
   }
 
@@ -1056,10 +1056,10 @@ HANDLE_RESPONSES:
   }
 
   //wait a bit letting the server to complete its remaining task(s)
-  memset(session_virgin_bits, 255, MAP_SIZE);
-  while(1) {
-    if (has_new_bits(session_virgin_bits) != 2) break;
-  }
+  // memset(session_virgin_bits, 255, MAP_SIZE);
+  // while(1) {
+  //   if (has_new_bits(session_virgin_bits) != 2) break;
+  // }
 
   if (likely_buggy && false_negative_reduction) return 0;
 
@@ -1070,7 +1070,6 @@ HANDLE_RESPONSES:
     int status = kill(child_pid, 0);
     if ((status != 0) && (errno == ESRCH)) break;
   }
-
   return 0;
 }
 /* End of AFLNet-specific variables & functions */
@@ -2880,8 +2879,8 @@ EAGAIN;
 
     setsid();
 
-    // dup2(dev_null_fd, 1);
-    // dup2(dev_null_fd, 2);
+    dup2(dev_null_fd, 1);
+    dup2(dev_null_fd, 2);
 
     if (out_file) {
 
@@ -7751,6 +7750,10 @@ static void sync_fuzzers(char** argv) {
 
 }
 
+static void at_exit() {
+  if (child_pid > 0) kill(child_pid, SIGKILL);
+  if (forksrv_pid > 0) kill(forksrv_pid, SIGKILL);
+}
 
 /* Handle stop signal (Ctrl-C, etc). */
 
@@ -8601,6 +8604,11 @@ EXP_ST void setup_signal_handlers(void) {
   sigaction(SIGHUP, &sa, NULL);
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
+
+  sa.sa_flags = SA_RESETHAND;
+  sigaction(SIGSEGV, &sa, NULL);
+
+  atexit(at_exit);
 
   /* Exec timeout notifications. */
 

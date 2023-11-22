@@ -2491,10 +2491,14 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
   struct pollfd pfd[1];
   pfd[0].fd = sockfd;
   pfd[0].events = POLLOUT;
-  int rv = poll(pfd, 1, 1);
+  int rv = 0;
+  // rv = poll(pfd, 1, 1);
 
-    hexdump("send: ", mem, 0, len);
-    exit(0);
+
+    // hexdump("send: ", mem, 0, len);
+    // exit(0);
+    write(sockfd, mem, len);
+  return;
 
   setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
   if (rv > 0) {
@@ -2512,12 +2516,31 @@ int net_send(int sockfd, struct timeval timeout, char *mem, unsigned int len) {
 }
 
 int net_recv(int sockfd, struct timeval timeout, int poll_w, char **response_buf, unsigned int *len) {
-  char temp_buf[1000];
+  static u8 temp_buf[2048];
   int n;
   struct pollfd pfd[1];
   pfd[0].fd = sockfd;
   pfd[0].events = POLLIN;
   int rv = poll(pfd, 1, poll_w);
+
+  if (rv < 0) return 1;
+
+  if (rv > 0 && pfd[0].revents & POLLIN) {
+    n = read(sockfd, temp_buf, sizeof(temp_buf));
+    if (n > 0) {
+      *response_buf = (unsigned char *)ck_realloc(*response_buf, *len + n + 1);
+      memcpy(&(*response_buf)[*len], temp_buf, n);
+      (*response_buf)[(*len) + n] = '\0';
+      *len = *len + n;
+      // hexdump("recv", temp_buf, 0, n);
+      return 0;
+    }
+    else {
+      return 1;
+    }
+  }
+
+  return 0;
 
   setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
   // data received
@@ -2544,6 +2567,7 @@ int net_recv(int sockfd, struct timeval timeout, int poll_w, char **response_buf
       return 1;
 
   // rv == 0 poll timeout or all data pending after poll has been received successfully
+  hexdump("recv: ", *response_buf, 0, *len);
   return 0;
 }
 
@@ -2696,6 +2720,8 @@ u8* state_sequence_to_string(unsigned int *stateSequence, unsigned int stateCoun
 
 
 void hexdump(unsigned char *msg, unsigned char * buf, int start, int end) {
+  fflush(stdout);
+
   printf("%s : ", msg);
   for (int i=start; i<end; i++) {
     printf("%02x", buf[i]);
